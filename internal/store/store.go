@@ -1,0 +1,571 @@
+// Package store SQLite 持久化：上游 U1S1 Key、本地分发 Key、请求记录。
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+// Store 封装 sqlite 连接。
+type Store struct {
+	db *sql.DB
+}
+
+// Open 打开（必要时创建）数据库并迁移 schema。
+func Open(path string) (*Store, error) {
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", path)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// modernc/sqlite 写并发有限，单连接串行化写入最稳。
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) migrate() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS upstream_keys(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			key TEXT NOT NULL UNIQUE,
+			note TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			cooldown_until INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			email TEXT NOT NULL DEFAULT '',
+			tokens_per_usd REAL NOT NULL DEFAULT 0,
+			daily_free_remaining_usd REAL NOT NULL DEFAULT -1,
+			remaining_usd REAL NOT NULL DEFAULT -1,
+			free_claim TEXT NOT NULL DEFAULT '',
+			quota_checked_at INTEGER NOT NULL DEFAULT 0,
+			total_requests INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			last_used_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS local_keys(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			key TEXT NOT NULL UNIQUE,
+			note TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			total_requests INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			last_used_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS requests(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts INTEGER NOT NULL,
+			api_key_name TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			upstream_key_id INTEGER NOT NULL DEFAULT 0,
+			stream INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'success',
+			http_status INTEGER NOT NULL DEFAULT 0,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			cost_usd REAL NOT NULL DEFAULT 0,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			client_ip TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+// ---- 上游 U1S1 Key ----
+
+// UpstreamKey 上游 key 记录。
+type UpstreamKey struct {
+	ID                   int64   `json:"id"`
+	Key                  string  `json:"key"`
+	KeyMasked            string  `json:"key_masked"`
+	Note                 string  `json:"note"`
+	Status               string  `json:"status"` // active|cooldown|disabled
+	CooldownUntil        int64   `json:"cooldown_until"`
+	LastError            string  `json:"last_error"`
+	Email                string  `json:"email"`
+	TokensPerUSD         float64 `json:"tokens_per_usd"`
+	DailyFreeRemainingUSD float64 `json:"daily_free_remaining_usd"`
+	RemainingUSD         float64 `json:"remaining_usd"`
+	FreeClaim            string  `json:"free_claim"`
+	QuotaCheckedAt       int64   `json:"quota_checked_at"`
+	TotalRequests        int64   `json:"total_requests"`
+	TotalTokens          int64   `json:"total_tokens"`
+	CreatedAt            int64   `json:"created_at"`
+	LastUsedAt           int64   `json:"last_used_at"`
+}
+
+// MaskKey 把 u1s1-xxxxxxxx... 显示为 u1s1-xxxx…xxxx。
+func MaskKey(key string) string {
+	if len(key) <= 14 {
+		return key
+	}
+	return key[:9] + "…" + key[len(key)-4:]
+}
+
+const upstreamKeyCols = `id,key,note,status,cooldown_until,last_error,email,tokens_per_usd,
+	daily_free_remaining_usd,remaining_usd,free_claim,quota_checked_at,total_requests,total_tokens,created_at,last_used_at`
+
+func scanUpstreamKey(row interface{ Scan(...any) error }) (*UpstreamKey, error) {
+	k := &UpstreamKey{}
+	err := row.Scan(&k.ID, &k.Key, &k.Note, &k.Status, &k.CooldownUntil, &k.LastError,
+		&k.Email, &k.TokensPerUSD, &k.DailyFreeRemainingUSD, &k.RemainingUSD, &k.FreeClaim,
+		&k.QuotaCheckedAt, &k.TotalRequests, &k.TotalTokens, &k.CreatedAt, &k.LastUsedAt)
+	if err != nil {
+		return nil, err
+	}
+	k.KeyMasked = MaskKey(k.Key)
+	return k, nil
+}
+
+// AddUpstreamKey 插入一把 key；重复返回 false。
+func (s *Store) AddUpstreamKey(key, note string) (bool, error) {
+	key = strings.TrimSpace(key)
+	res, err := s.db.Exec(`INSERT OR IGNORE INTO upstream_keys(key,note,created_at) VALUES(?,?,?)`,
+		key, strings.TrimSpace(note), time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ListUpstreamKeys 全量列出（按创建顺序）。
+func (s *Store) ListUpstreamKeys() ([]*UpstreamKey, error) {
+	rows, err := s.db.Query(`SELECT ` + upstreamKeyCols + ` FROM upstream_keys ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*UpstreamKey
+	for rows.Next() {
+		k, err := scanUpstreamKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// DeleteUpstreamKey 删除。
+func (s *Store) DeleteUpstreamKey(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM upstream_keys WHERE id=?`, id)
+	return err
+}
+
+// SetUpstreamKeyStatus 更新状态/冷却/错误信息。
+func (s *Store) SetUpstreamKeyStatus(id int64, status string, cooldownUntil time.Time, lastErr string) error {
+	until := cooldownUntil.Unix()
+	if cooldownUntil.IsZero() {
+		until = 0
+	}
+	_, err := s.db.Exec(`UPDATE upstream_keys SET status=?, cooldown_until=?, last_error=? WHERE id=?`,
+		status, until, lastErr, id)
+	return err
+}
+
+// UpdateUpstreamQuota 写入 /me 配额快照。配额查询成功说明 key 有效：
+// 若处于冷却态则一并恢复 active（免费额度已确认可用）。
+func (s *Store) UpdateUpstreamQuota(id int64, email string, tokensPerUSD, dailyRemaining, remaining float64, freeClaim string) error {
+	_, err := s.db.Exec(`UPDATE upstream_keys SET email=?, tokens_per_usd=?, daily_free_remaining_usd=?,
+		remaining_usd=?, free_claim=?, quota_checked_at=?,
+		status=CASE WHEN status='cooldown' THEN 'active' ELSE status END,
+		cooldown_until=CASE WHEN status='cooldown' THEN 0 ELSE cooldown_until END
+		WHERE id=?`, email, tokensPerUSD, dailyRemaining, remaining, freeClaim, time.Now().Unix(), id)
+	return err
+}
+
+// TouchUpstreamKey 更新最后使用时间与累计计数。
+func (s *Store) TouchUpstreamKey(id int64, tokens int64) error {
+	_, err := s.db.Exec(`UPDATE upstream_keys SET last_used_at=?, total_requests=total_requests+1,
+		total_tokens=total_tokens+? WHERE id=?`, time.Now().Unix(), tokens, id)
+	return err
+}
+
+// CountUpstreamKeysByStatus 统计各状态数量。
+func (s *Store) CountUpstreamKeysByStatus() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM upstream_keys GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{"total": 0}
+	for rows.Next() {
+		var st string
+		var n int
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, err
+		}
+		out[st] = n
+		out["total"] += n
+	}
+	return out, rows.Err()
+}
+
+// ---- 本地分发 Key ----
+
+// LocalKey 本地 sk- key。
+type LocalKey struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Key           string `json:"key"`
+	KeyMasked     string `json:"key_masked"`
+	Note          string `json:"note"`
+	Enabled       bool   `json:"enabled"`
+	TotalRequests int64  `json:"total_requests"`
+	TotalTokens   int64  `json:"total_tokens"`
+	CreatedAt     int64  `json:"created_at"`
+	LastUsedAt    int64  `json:"last_used_at"`
+}
+
+const localKeyCols = `id,name,key,note,enabled,total_requests,total_tokens,created_at,last_used_at`
+
+func scanLocalKey(row interface{ Scan(...any) error }) (*LocalKey, error) {
+	k := &LocalKey{}
+	var enabled int
+	err := row.Scan(&k.ID, &k.Name, &k.Key, &k.Note, &enabled, &k.TotalRequests, &k.TotalTokens, &k.CreatedAt, &k.LastUsedAt)
+	if err != nil {
+		return nil, err
+	}
+	k.Enabled = enabled == 1
+	k.KeyMasked = MaskLocalKey(k.Key)
+	return k, nil
+}
+
+// MaskLocalKey 本地 key 掩码显示。
+func MaskLocalKey(key string) string {
+	if len(key) <= 12 {
+		return key
+	}
+	return key[:7] + "…" + key[len(key)-4:]
+}
+
+// CreateLocalKey 新建本地 key（name 冲突时自动加后缀）。
+func (s *Store) CreateLocalKey(name, key, note string) (*LocalKey, error) {
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "default"
+	}
+	name = base
+	for i := 2; ; i++ {
+		var exists int
+		err := s.db.QueryRow(`SELECT COUNT(*) FROM local_keys WHERE name=?`, name).Scan(&exists)
+		if err != nil {
+			return nil, err
+		}
+		if exists == 0 {
+			break
+		}
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(`INSERT INTO local_keys(name,key,note,created_at) VALUES(?,?,?,?)`,
+		name, key, note, now); err != nil {
+		return nil, err
+	}
+	row := s.db.QueryRow(`SELECT `+localKeyCols+` FROM local_keys WHERE name=?`, name)
+	return scanLocalKey(row)
+}
+
+// ListLocalKeys 列出全部。
+func (s *Store) ListLocalKeys() ([]*LocalKey, error) {
+	rows, err := s.db.Query(`SELECT ` + localKeyCols + ` FROM local_keys ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*LocalKey
+	for rows.Next() {
+		k, err := scanLocalKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// AuthenticateLocalKey 校验 Bearer/x-api-key，返回 key 名；未命中返回 ""。
+func (s *Store) AuthenticateLocalKey(presented string) (string, error) {
+	if presented == "" {
+		return "", nil
+	}
+	var name string
+	var enabled int
+	err := s.db.QueryRow(`SELECT name, enabled FROM local_keys WHERE key=?`, presented).Scan(&name, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if enabled != 1 {
+		return "", nil
+	}
+	_, _ = s.db.Exec(`UPDATE local_keys SET last_used_at=?, total_requests=total_requests+1 WHERE name=?`,
+		time.Now().Unix(), name)
+	return name, nil
+}
+
+// UpdateLocalKey 改名/备注/启停。
+func (s *Store) UpdateLocalKey(name string, fields map[string]any) error {
+	sets := []string{}
+	args := []any{}
+	if v, ok := fields["note"]; ok {
+		sets = append(sets, "note=?")
+		args = append(args, v)
+	}
+	if v, ok := fields["enabled"]; ok {
+		sets = append(sets, "enabled=?")
+		args = append(args, v)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, name)
+	_, err := s.db.Exec(`UPDATE local_keys SET `+strings.Join(sets, ",")+` WHERE name=?`, args...)
+	return err
+}
+
+// DeleteLocalKey 删除。
+func (s *Store) DeleteLocalKey(name string) error {
+	_, err := s.db.Exec(`DELETE FROM local_keys WHERE name=?`, name)
+	return err
+}
+
+// ---- 请求记录 ----
+
+// RequestRecord 一条转发记录。
+type RequestRecord struct {
+	ID           int64   `json:"id"`
+	TS           int64   `json:"ts"`
+	APIKeyName   string  `json:"api_key_name"`
+	Model        string  `json:"model"`
+	UpstreamKeyID int64  `json:"upstream_key_id"`
+	Stream       bool    `json:"stream"`
+	Status       string  `json:"status"`
+	HTTPStatus   int     `json:"http_status"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	DurationMS   int64   `json:"duration_ms"`
+	Error        string  `json:"error"`
+	ClientIP     string  `json:"client_ip"`
+}
+
+// InsertRequest 落库。
+func (s *Store) InsertRequest(r *RequestRecord) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO requests(ts,api_key_name,model,upstream_key_id,stream,status,
+		http_status,input_tokens,output_tokens,total_tokens,cost_usd,duration_ms,error,client_ip)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.TS, r.APIKeyName, r.Model, r.UpstreamKeyID, b2i(r.Stream), r.Status, r.HTTPStatus,
+		r.InputTokens, r.OutputTokens, r.TotalTokens, r.CostUSD, r.DurationMS, r.Error, r.ClientIP)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// RequestFilter 列表过滤条件。
+type RequestFilter struct {
+	Model    string
+	Status   string
+	KeyName  string
+	Limit    int
+	Offset   int
+}
+
+// ListRequests 分页查询（新→旧）。
+func (s *Store) ListRequests(f RequestFilter) ([]*RequestRecord, error) {
+	where, args := requestWhere(f)
+	limit := f.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT id,ts,api_key_name,model,upstream_key_id,stream,status,http_status,
+		input_tokens,output_tokens,total_tokens,cost_usd,duration_ms,error,client_ip
+		FROM requests ` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, f.Offset)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*RequestRecord{}
+	for rows.Next() {
+		r := &RequestRecord{}
+		var stream int
+		if err := rows.Scan(&r.ID, &r.TS, &r.APIKeyName, &r.Model, &r.UpstreamKeyID, &stream,
+			&r.Status, &r.HTTPStatus, &r.InputTokens, &r.OutputTokens, &r.TotalTokens,
+			&r.CostUSD, &r.DurationMS, &r.Error, &r.ClientIP); err != nil {
+			return nil, err
+		}
+		r.Stream = stream == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountRequests 总数。
+func (s *Store) CountRequests(f RequestFilter) (int, error) {
+	where, args := requestWhere(f)
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests `+where, args...).Scan(&n)
+	return n, err
+}
+
+func requestWhere(f RequestFilter) (string, []any) {
+	conds := []string{}
+	args := []any{}
+	if f.Model != "" {
+		conds = append(conds, "model=?")
+		args = append(args, f.Model)
+	}
+	if f.Status != "" {
+		conds = append(conds, "status=?")
+		args = append(args, f.Status)
+	}
+	if f.KeyName != "" {
+		conds = append(conds, "api_key_name=?")
+		args = append(args, f.KeyName)
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(conds, " AND "), args
+}
+
+// ClearRequests 清空请求记录。
+func (s *Store) ClearRequests() error {
+	_, err := s.db.Exec(`DELETE FROM requests`)
+	return err
+}
+
+// DailyUsage 按天聚合。
+type DailyUsage struct {
+	Date      string  `json:"date"`
+	Requests  int64   `json:"requests"`
+	TotalTok  int64   `json:"total_tokens"`
+	CostUSD   float64 `json:"cost_usd"`
+}
+
+// DailyUsage 最近 days 天的逐日用量（含今天，缺数据的天补零）。
+func (s *Store) DailyUsage(days int) ([]DailyUsage, error) {
+	loc := time.FixedZone("CST", 8*3600) // 北京时间对齐免费额度重置点
+	today := time.Now().In(loc)
+	start := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc).
+		AddDate(0, 0, -(days - 1)).Unix()
+
+	rows, err := s.db.Query(`SELECT ts, COUNT(*), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0)
+		FROM requests WHERE ts>=? GROUP BY date(ts,'unixepoch','+8 hours')`, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byDate := map[string]DailyUsage{}
+	for rows.Next() {
+		var ts int64
+		var d DailyUsage
+		if err := rows.Scan(&ts, &d.Requests, &d.TotalTok, &d.CostUSD); err != nil {
+			return nil, err
+		}
+		d.Date = time.Unix(ts, 0).In(loc).Format("2006-01-02")
+		byDate[d.Date] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]DailyUsage, 0, days)
+	startDay := time.Unix(start, 0).In(loc)
+	for i := 0; i < days; i++ {
+		ds := startDay.AddDate(0, 0, i).Format("2006-01-02")
+		if d, ok := byDate[ds]; ok {
+			out = append(out, d)
+		} else {
+			out = append(out, DailyUsage{Date: ds})
+		}
+	}
+	return out, nil
+}
+
+// ModelUsage 按模型聚合。
+type ModelUsage struct {
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
+	TotalTok int64  `json:"total_tokens"`
+}
+
+// TopModels 最近 days 天按模型聚合，取前 limit 个。
+func (s *Store) TopModels(days, limit int) ([]ModelUsage, error) {
+	loc := time.FixedZone("CST", 8*3600)
+	start := time.Now().In(loc).AddDate(0, 0, -(days - 1)).Unix()
+	rows, err := s.db.Query(`SELECT model, COUNT(*), COALESCE(SUM(total_tokens),0)
+		FROM requests WHERE ts>=? GROUP BY model ORDER BY COUNT(*) DESC LIMIT ?`, start, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ModelUsage{}
+	for rows.Next() {
+		var m ModelUsage
+		if err := rows.Scan(&m.Model, &m.Requests, &m.TotalTok); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// UsageSummary 区间汇总。
+type UsageSummary struct {
+	Requests     int64   `json:"requests"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	TotalTokens  int64   `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+}
+
+// SummarySince 从 since（unix 秒）起的汇总。
+func (s *Store) SummarySince(since int64) (UsageSummary, error) {
+	var u UsageSummary
+	err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0) FROM requests WHERE ts>=?`, since).
+		Scan(&u.Requests, &u.InputTokens, &u.OutputTokens, &u.TotalTokens, &u.CostUSD)
+	return u, err
+}
+
+// RecentRequests 最近 n 条。
+func (s *Store) RecentRequests(n int) ([]*RequestRecord, error) {
+	return s.ListRequests(RequestFilter{Limit: n})
+}

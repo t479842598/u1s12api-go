@@ -1,0 +1,22 @@
+[Unit]
+Description=u1s12api-go — U1S1 OpenAI-compatible API gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/u1s12api
+ExecStart=/opt/u1s12api/u1s12api
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/opt/u1s12api
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/u1s12api/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

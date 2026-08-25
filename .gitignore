@@ -1,0 +1,11 @@
+data/
+*.db*
+.env
+u1s12api
+u1s12api.exe
+dist/
+# 补充 .gitignore
+u1s12api-*
+*.tar.gz
+static/*
+!static/.gitkeep
