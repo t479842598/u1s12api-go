@@ -356,6 +356,19 @@ func (s *Store) DeleteLocalKey(name string) error {
 	return err
 }
 
+// GetLocalKeyByName 按名称取本地 key（含完整密钥）。不存在时返回错误。
+func (s *Store) GetLocalKeyByName(name string) (*LocalKey, error) {
+	row := s.db.QueryRow(`SELECT `+localKeyCols+` FROM local_keys WHERE name=?`, name)
+	k, err := scanLocalKey(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("API Key %q 不存在", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
 // ---- 请求记录 ----
 
 // RequestRecord 一条转发记录。

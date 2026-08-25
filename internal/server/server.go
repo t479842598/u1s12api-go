@@ -178,6 +178,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/local-keys", s.requireAdmin(s.handleCreateLocalKey))
 	mux.HandleFunc("PUT /admin/api/local-keys/{name}", s.requireAdmin(s.handleUpdateLocalKey))
 	mux.HandleFunc("DELETE /admin/api/local-keys/{name}", s.requireAdmin(s.handleDeleteLocalKey))
+	mux.HandleFunc("POST /admin/api/local-keys/{name}/copy", s.requireAdmin(s.handleCopyLocalKey))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))
 	mux.HandleFunc("GET /admin/api/settings", s.requireAdmin(s.handleGetSettings))

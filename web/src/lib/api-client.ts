@@ -110,6 +110,11 @@ export const api = {
     request<unknown>(`/local-keys/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+  copyLocalKey: (name: string) =>
+    request<{ name: string; key: string }>(
+      `/local-keys/${encodeURIComponent(name)}/copy`,
+      { method: "POST" },
+    ),
 
   // 请求记录
   requests: (params?: {

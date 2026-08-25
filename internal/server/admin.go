@@ -423,6 +423,10 @@ func (s *Server) handleListLocalKeys(w http.ResponseWriter, _ *http.Request) {
 	if keys == nil {
 		keys = []*store.LocalKey{}
 	}
+	// 列表不回明文；完整 key 通过 POST /api/local-keys/{name}/copy 取回。
+	for _, k := range keys {
+		k.Key = ""
+	}
 	writeAPIData(w, http.StatusOK, map[string]any{"keys": keys})
 }
 
@@ -488,6 +492,17 @@ func (s *Server) handleDeleteLocalKey(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.Infof("删除本地 API Key: %s", name)
 	writeAPIData(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleCopyLocalKey 按名称取回完整密钥供复制（仅管理员登录后可调用）。
+func (s *Server) handleCopyLocalKey(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	k, err := s.store.GetLocalKeyByName(name)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeAPIData(w, http.StatusOK, map[string]any{"name": k.Name, "key": k.Key})
 }
 
 // ---- 请求记录 ----

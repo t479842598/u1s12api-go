@@ -12,7 +12,7 @@ import {
 
 export default function LogsPage() {
   const [items, setItems] = useState<LogEntry[]>([])
-  const [autoScroll, setAutoScroll] = useState(true)
+  const [stayNewest, setStayNewest] = useState(true)
   const boxRef = useRef<HTMLDivElement>(null)
   const lastIdRef = useRef(0)
 
@@ -20,6 +20,7 @@ export default function LogsPage() {
     try {
       const d = await api.logs({ since_id: lastIdRef.current, limit: 500 })
       if (d.items.length > 0) {
+        // 服务端按时间升序返回；items 保持升序，渲染时倒转呈现（最新在顶）。
         lastIdRef.current = d.items[d.items.length - 1].id
         setItems((prev) => [...prev, ...d.items].slice(-2000))
       }
@@ -36,11 +37,12 @@ export default function LogsPage() {
     return () => clearInterval(t)
   }, [poll])
 
+  // 最新在顶部：新增日志到来时保持视口钉在顶部。
   useEffect(() => {
-    if (autoScroll && boxRef.current) {
-      boxRef.current.scrollTop = boxRef.current.scrollHeight
+    if (stayNewest && boxRef.current) {
+      boxRef.current.scrollTop = 0
     }
-  }, [items, autoScroll])
+  }, [items, stayNewest])
 
   const levelVariant = (lv: string) =>
     lv === "ERROR" ? "destructive" : lv === "WARN" ? "outline" : "secondary"
@@ -55,10 +57,10 @@ export default function LogsPage() {
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
-            checked={autoScroll}
-            onChange={(e) => setAutoScroll(e.target.checked)}
+            checked={stayNewest}
+            onChange={(e) => setStayNewest(e.target.checked)}
           />
-          自动滚动
+          固定最新（顶部）
         </label>
       </div>
 
@@ -75,7 +77,7 @@ export default function LogsPage() {
             {items.length === 0 && (
               <p className="text-zinc-500">等待日志输出…</p>
             )}
-            {items.map((e) => (
+            {[...items].reverse().map((e) => (
               <div key={e.id} className="whitespace-pre-wrap break-all">
                 <span className="text-zinc-500">{e.ts}</span>{" "}
                 <Badge variant={levelVariant(e.level)} className="mr-1 align-middle text-[10px]">

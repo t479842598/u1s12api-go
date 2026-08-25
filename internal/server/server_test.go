@@ -408,6 +408,7 @@ func TestAdminLoginAndImportFlow(t *testing.T) {
 }
 
 func cookieOf(resp *http.Response) string {
+
 	for _, c := range resp.Cookies() {
 		if c.Name == adminCookieName {
 			return c.Name + "=" + c.Value
@@ -418,3 +419,70 @@ func cookieOf(resp *http.Response) string {
 
 func timeNow() time.Time { return time.Now() }
 
+
+// TestLocalKeyCopyAnytime 校验本地 key 完整值可取回（供列表随时复制）。
+func TestLocalKeyCopyAnytime(t *testing.T) {
+	fx := setupTest(t, func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	// 登录拿 cookie
+	client := &http.Client{}
+	creq, _ := http.NewRequest("POST", fx.ts.URL+"/admin/api/login", strings.NewReader(`{"key":"test-admin-pw"}`))
+	lresp, err := client.Do(creq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ck := cookieOf(lresp)
+	lresp.Body.Close()
+
+	// admin 创建本地 key
+	breq, _ := http.NewRequest("POST", fx.ts.URL+"/admin/api/local-keys", strings.NewReader(`{"name":"cli","note":"测试"}`))
+	breq.Header.Set("Cookie", ck)
+	iresp, err := client.Do(breq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Data struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(iresp.Body).Decode(&created)
+	iresp.Body.Close()
+	if created.Data.Name != "cli" {
+		t.Fatalf("创建 name = %q", created.Data.Name)
+	}
+
+	// 列表只回掩码
+	lreq, _ := http.NewRequest("GET", fx.ts.URL+"/admin/api/local-keys", nil)
+	lreq.Header.Set("Cookie", ck)
+	lkResp, _ := client.Do(lreq)
+	var lk struct {
+		Data struct {
+			Keys []store.LocalKey `json:"keys"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(lkResp.Body).Decode(&lk)
+	lkResp.Body.Close()
+	if len(lk.Data.Keys) != 1 || lk.Data.Keys[0].Key != "" {
+		t.Errorf("列表不应携带明文 key")
+	}
+
+	// /copy 端点取回完整 key
+	cpReq, _ := http.NewRequest("POST", fx.ts.URL+"/admin/api/local-keys/cli/copy", nil)
+	cpReq.Header.Set("Cookie", ck)
+	cpResp, err := client.Do(cpReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cp struct {
+		Data struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(cpResp.Body).Decode(&cp)
+	cpResp.Body.Close()
+	if !strings.HasPrefix(cp.Data.Key, "sk-u1s12-") || len(cp.Data.Key) < 32 {
+		t.Errorf("copy 端点未返回完整 key: %q", cp.Data.Key)
+	}
+}

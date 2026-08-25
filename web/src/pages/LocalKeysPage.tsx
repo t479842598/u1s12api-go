@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/table"
 import { PageLoading } from "@/components/shared/PageLoading"
 import { CopyButton } from "@/components/shared/CopyButton"
-import { Plus, Trash2 } from "lucide-react"
+import { Copy as CopyIcon, Plus, Trash2 } from "lucide-react"
 
 function fmtTime(unix: number): string {
   if (!unix) return "—"
@@ -58,10 +58,15 @@ export default function LocalKeysPage() {
     setCreating(true)
     try {
       const created = await api.createLocalKey(name.trim(), note.trim())
-      // 创建响应携带完整 key，仅此一次展示
       setCreatedKey({ ...created })
       setName("")
       setNote("")
+      try {
+        await navigator.clipboard.writeText(created.key)
+        toast.success("已生成并复制到剪贴板")
+      } catch {
+        // 剪贴板受限时用户可从窗口手动复制
+      }
       load()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "创建失败")
@@ -73,6 +78,16 @@ export default function LocalKeysPage() {
   const toggle = async (k: LocalKeyItem) => {
     await api.updateLocalKey(k.name, { enabled: !k.enabled })
     load()
+  }
+
+  const copy = async (k: LocalKeyItem) => {
+    try {
+      const { key } = await api.copyLocalKey(k.name)
+      await navigator.clipboard.writeText(key)
+      toast.success(`已复制 ${k.name} 的完整 Key`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "复制失败")
+    }
   }
 
   const remove = async (k: LocalKeyItem) => {
@@ -117,7 +132,7 @@ export default function LocalKeysPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Key 列表</CardTitle>
-          <CardDescription>完整密钥只在创建时展示一次，请妥善保存</CardDescription>
+          <CardDescription>点击行内复制按钮，可随时取回完整密钥</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -167,6 +182,14 @@ export default function LocalKeysPage() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="复制完整 Key"
+                        onClick={() => copy(k)}
+                      >
+                        <CopyIcon className="h-4 w-4" />
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => toggle(k)}>
                         {k.enabled ? "停用" : "启用"}
                       </Button>
@@ -187,7 +210,7 @@ export default function LocalKeysPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Key 已生成：{createdKey?.name}</DialogTitle>
-            <DialogDescription>请立即复制保存，关闭后无法再次查看完整内容。</DialogDescription>
+            <DialogDescription>已自动复制到剪贴板（也可在列表中随时复制）。</DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-2">
             <code className="flex-1 break-all rounded bg-muted px-3 py-2 text-xs">
