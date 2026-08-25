@@ -263,6 +263,54 @@ export default function DashboardPage() {
               <UsageBars entries={modelEntries} loading={statsLoading} emptyLabel="暂无模型用量数据" kind="model" />
             </CardContent>
           </Card>
+
+          {/* 最近请求 */}
+          <Card className="border-border/60">
+            <CardHeader className="pb-1">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <FileText className="size-4 text-primary" />最近请求
+                </CardTitle>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => navigate("/admin/requests")}>
+                  查看全部 <ArrowRight className="ml-1 size-3" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? <Skeleton className="h-32 w-full" /> : recent.length === 0 ? (
+                <p className="py-8 text-center text-xs text-muted-foreground">暂无请求</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[420px] border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-border/60">
+                        <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">时间</th>
+                        <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">模型</th>
+                        <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">状态</th>
+                        <th className="py-1.5 pr-3 text-right font-medium text-muted-foreground">Tokens</th>
+                        <th className="py-1.5 text-right font-medium text-muted-foreground">耗时</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recent.map((r) => (
+                        <tr key={r.id} className="border-b border-border/40 last:border-0">
+                          <td className="whitespace-nowrap py-1.5 pr-3">{new Date(r.ts * 1000).toLocaleString("zh-CN")}</td>
+                          <td className="py-1.5 pr-3"><code className="text-[10px]">{r.model}</code></td>
+                          <td className="py-1.5 pr-3">
+                            <Badge variant={r.status === "success" ? "secondary" : "destructive"} className="text-[10px]">
+                              {r.status === "success" ? r.http_status : r.error.slice(0, 30) || r.http_status}
+                            </Badge>
+                          </td>
+                          <td className="py-1.5 pr-3 text-right">{r.total_tokens}</td>
+                          <td className="py-1.5 text-right">{r.duration_ms}ms</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-4">
@@ -353,56 +401,6 @@ export default function DashboardPage() {
           </Card>
         </div>
       </div>
-
-      {/* 最近请求 */}
-      <Card className="border-border/60">
-        <CardHeader className="pb-1">
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium">
-              <FileText className="size-4 text-primary" />最近请求
-            </CardTitle>
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => navigate("/admin/requests")}>
-              查看全部 <ArrowRight className="ml-1 size-3" />
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {loading ? <Skeleton className="h-32 w-full" /> : recent.length === 0 ? (
-            <p className="py-8 text-center text-xs text-muted-foreground">暂无请求</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[500px] border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-border/60">
-                    <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">时间</th>
-                    <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">模型</th>
-                    <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">状态</th>
-                    <th className="py-1.5 pr-3 text-right font-medium text-muted-foreground">Tokens</th>
-                    <th className="py-1.5 pr-3 text-right font-medium text-muted-foreground">耗时</th>
-                    <th className="py-1.5 text-right font-medium text-muted-foreground">来源</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recent.map((r) => (
-                    <tr key={r.id} className="border-b border-border/40 last:border-0">
-                      <td className="whitespace-nowrap py-1.5 pr-3">{new Date(r.ts * 1000).toLocaleString("zh-CN")}</td>
-                      <td className="py-1.5 pr-3"><code className="text-[10px]">{r.model}</code></td>
-                      <td className="py-1.5 pr-3">
-                        <Badge variant={r.status === "success" ? "secondary" : "destructive"} className="text-[10px]">
-                          {r.status === "success" ? r.http_status : r.error.slice(0, 30) || r.http_status}
-                        </Badge>
-                      </td>
-                      <td className="py-1.5 pr-3 text-right">{r.total_tokens}</td>
-                      <td className="py-1.5 pr-3 text-right">{r.duration_ms}ms</td>
-                      <td className="py-1.5 text-right text-muted-foreground">{r.client_ip || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   )
 }
