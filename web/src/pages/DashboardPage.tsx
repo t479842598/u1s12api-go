@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { api, ApiClientError } from "@/lib/api-client"
 import type { OverviewData, RequestStats, StatsRange } from "@/types"
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select"
 import { PageLoading } from "@/components/shared/PageLoading"
 import {
-  Activity, ArrowRight, BarChart3, CheckCircle2, Coins, FileText, KeyRound,
+  Activity, ArrowRight, BarChart3, Coins, FileText, KeyRound,
   Plus, Terminal, Zap,
 } from "lucide-react"
 import type { ReactNode } from "react"
@@ -31,7 +31,7 @@ function StatCard({ icon, title, value, detail, loading }: {
   icon: ReactNode; title: string; value: ReactNode; detail?: ReactNode; loading: boolean
 }) {
   return (
-    <Card className="border-border/60 shadow-sm">
+    <Card className="border-border/60">
       <CardContent className="pt-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -48,10 +48,10 @@ function StatCard({ icon, title, value, detail, loading }: {
   )
 }
 
-function ValueMetric({ label, value, color = "default" }: {
-  label: string; value: ReactNode; color?: "default" | "success" | "destructive" | "warning"
+function ValueMetric({ label, value, tone }: {
+  label: string; value: ReactNode; tone?: "success" | "destructive" | "warning"
 }) {
-  const cls = { default: "text-foreground", success: "text-green-600", destructive: "text-red-600", warning: "text-amber-600" }[color]
+  const cls = tone === "success" ? "text-success" : tone === "destructive" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-foreground"
   return (
     <div className="rounded-lg border bg-muted/25 px-3 py-2.5">
       <p className="text-[11px] text-muted-foreground">{label}</p>
@@ -92,13 +92,13 @@ function UsageBars({ entries, loading, emptyLabel, kind }: {
   if (entries.length === 0) return <p className="py-12 text-center text-xs text-muted-foreground">{emptyLabel}</p>
   return (
     <div className="space-y-3">
-      {entries.slice(0, 6).map(([label, data], i) => {
+      {entries.slice(0, 8).map(([label, data], i) => {
         const width = Math.max(6, (data.total_tokens / maxTokens) * 100)
         return (
-          <div key={label} className="rounded-xl border border-border/50 bg-muted/10 p-3 transition-colors hover:bg-muted/30">
+          <div key={label} className="rounded-lg border border-border/50 bg-muted/10 p-3">
             <div className="mb-2 flex items-center justify-between gap-3 text-xs">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[10px] font-semibold text-primary">{i + 1}</span>
+                <span className="flex size-5 shrink-0 items-center justify-center rounded bg-primary/10 text-[10px] font-semibold text-primary">{i + 1}</span>
                 <span className={`min-w-0 truncate ${kind === "model" ? "font-mono" : "font-medium"}`} title={label}>{label}</span>
               </div>
               <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
@@ -106,8 +106,8 @@ function UsageBars({ entries, loading, emptyLabel, kind }: {
                 <span>{data.count} 次</span>
               </div>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-gradient-to-r from-primary via-sky-400 to-amber-400 transition-all" style={{ width: `${width}%` }} />
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary/70 transition-all" style={{ width: `${width}%` }} />
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
               <span>输入 {data.prompt_tokens.toLocaleString()}</span>
@@ -131,7 +131,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [statsLoading, setStatsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval>>(undefined as unknown as ReturnType<typeof setInterval>)
 
   const loadOverview = useCallback(async () => {
     try {
@@ -157,8 +156,8 @@ export default function DashboardPage() {
   useEffect(() => {
     loadOverview()
     loadStats()
-    pollRef.current = setInterval(loadOverview, 15000)
-    return () => clearInterval(pollRef.current)
+    const t = setInterval(loadOverview, 15000)
+    return () => clearInterval(t)
   }, [loadOverview, loadStats])
 
   if (loading && !overview) return <PageLoading />
@@ -181,12 +180,14 @@ export default function DashboardPage() {
   const errorPct = statsTotal > 0 ? Math.round((statsError / statsTotal) * 100) : 0
   const quietPct = Math.max(0, 100 - successPct - errorPct)
 
-  // 模型/Key 统计条目
+  // 模型/上游Key/本地Key 统计条目
   const modelEntries = Object.entries(s?.by_model ?? {}).sort((a, b) => b[1].total_tokens - a[1].total_tokens)
+  const upstreamKeyEntries = Object.entries(s?.by_upstream_key ?? {}).sort((a, b) => b[1].total_tokens - a[1].total_tokens)
+  const apiKeyEntries = Object.entries(s?.by_api_key ?? {}).sort((a, b) => b[1].total_tokens - a[1].total_tokens)
   const rangeLabel = STATS_RANGE_OPTIONS.find((o) => o.value === statsRange)?.label ?? "全部"
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* 错误提示 */}
       {error && (
         <div className="rounded-lg border border-destructive/50 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div>
@@ -204,11 +205,11 @@ export default function DashboardPage() {
           detail={`累计 $${totals.cost_usd.toFixed(4)}`} loading={loading} />
       </div>
 
-      {/* 请求统计 + 模型用量 */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_360px]">
-        <div className="space-y-5">
+      {/* 请求统计 + 模型/Key 用量 */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
+        <div className="space-y-4">
           {/* 请求统计 */}
-          <Card className="border-border/60 shadow-sm">
+          <Card className="border-border/60">
             <CardHeader className="pb-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -225,9 +226,9 @@ export default function DashboardPage() {
                 <>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     <ValueMetric label="总请求" value={statsTotal} />
-                    <ValueMetric label="成功" value={statsSuccess} color="success" />
-                    <ValueMetric label="失败" value={statsError} color="destructive" />
-                    <ValueMetric label="总 Token" value={fmtTokens(s?.total_tokens ?? 0)} color="warning" />
+                    <ValueMetric label="成功" value={statsSuccess} tone="success" />
+                    <ValueMetric label="失败" value={statsError} tone="destructive" />
+                    <ValueMetric label="总 Token" value={fmtTokens(s?.total_tokens ?? 0)} tone="warning" />
                     <ValueMetric label="平均耗时" value={s?.avg_duration_ms ? `${Math.round(s.avg_duration_ms)}ms` : "-"} />
                   </div>
                   <div>
@@ -235,9 +236,9 @@ export default function DashboardPage() {
                       <span>成功率 {successPct}%</span>
                       <span>失败率 {errorPct}%</span>
                     </div>
-                    <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
-                      <div className="bg-green-500 transition-all" style={{ width: `${successPct}%` }} />
-                      <div className="bg-red-500 transition-all" style={{ width: `${errorPct}%` }} />
+                    <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
+                      <div className="bg-success transition-all" style={{ width: `${successPct}%` }} />
+                      <div className="bg-destructive transition-all" style={{ width: `${errorPct}%` }} />
                       <div className="bg-muted-foreground/15" style={{ width: `${quietPct}%` }} />
                     </div>
                   </div>
@@ -247,7 +248,7 @@ export default function DashboardPage() {
           </Card>
 
           {/* 模型用量 */}
-          <Card className="border-border/60 shadow-sm">
+          <Card className="border-border/60">
             <CardHeader className="pb-1">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -264,9 +265,9 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
           {/* 快捷操作 */}
-          <Card className="border-border/60 shadow-sm">
+          <Card className="border-border/60">
             <CardHeader className="pb-1">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <Zap className="size-4 text-primary" />快捷操作
@@ -288,8 +289,33 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
+          {/* 上游 Key 用量 */}
+          <Card className="border-border/60">
+            <CardHeader className="pb-1">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <KeyRound className="size-4 text-primary" />Key 用量（{upstreamKeyEntries.length} 把）
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground">每把 U1S1 Key 的调用次数与 Token 消耗</p>
+            </CardHeader>
+            <CardContent>
+              <UsageBars entries={upstreamKeyEntries} loading={statsLoading} emptyLabel="暂无 Key 用量数据" kind="key" />
+            </CardContent>
+          </Card>
+
+          {/* 本地 API Key 用量 */}
+          <Card className="border-border/60">
+            <CardHeader className="pb-1">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <KeyRound className="size-4 text-primary" />本地 API Key 用量
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <UsageBars entries={apiKeyEntries} loading={statsLoading} emptyLabel="暂无本地 Key 用量" kind="key" />
+            </CardContent>
+          </Card>
+
           {/* 14 天趋势 */}
-          <Card className="border-border/60 shadow-sm">
+          <Card className="border-border/60">
             <CardHeader className="pb-1">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <BarChart3 className="size-4 text-primary" />近 14 天趋势
@@ -297,10 +323,10 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               {loading ? <Skeleton className="h-32 w-full" /> : (
-                <div className="flex h-32 items-end gap-1.5">
+                <div className="flex h-32 items-end gap-1">
                   {daily.map((d) => (
                     <div key={d.date} className="group relative flex flex-1 flex-col items-center justify-end" style={{ height: "100%" }}>
-                      <div className="w-full rounded-t bg-primary/70 transition-colors group-hover:bg-primary"
+                      <div className="w-full rounded-t bg-primary/60 transition-colors group-hover:bg-primary"
                         style={{ height: `${Math.max(2, (d.requests / maxDay) * 100)}%` }} />
                       <div className="pointer-events-none absolute -top-8 z-10 hidden whitespace-nowrap rounded bg-foreground px-2 py-1 text-[10px] text-background group-hover:block">
                         {d.date}: {d.requests} 次 / {fmtTokens(d.total_tokens)}
@@ -313,13 +339,13 @@ export default function DashboardPage() {
           </Card>
 
           {/* 指纹信息 */}
-          <Card className="border-border/60 shadow-sm">
+          <Card className="border-border/60">
             <CardHeader className="pb-1">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <CheckCircle2 className="size-4 text-primary" />请求头指纹
+                <Zap className="size-4 text-primary" />请求头指纹
               </CardTitle>
             </CardHeader>
-            <CardContent className="text-xs text-muted-foreground space-y-1">
+            <CardContent className="space-y-1 text-xs text-muted-foreground">
               <div>档案：<Badge variant="secondary" className="text-[10px]">{fp.label}</Badge></div>
               <code className="block rounded bg-muted px-2 py-1 text-[10px]">{fp.user_agent}</code>
               <div>Node {fp.runtime}</div>
@@ -329,7 +355,7 @@ export default function DashboardPage() {
       </div>
 
       {/* 最近请求 */}
-      <Card className="border-border/60 shadow-sm">
+      <Card className="border-border/60">
         <CardHeader className="pb-1">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -359,7 +385,7 @@ export default function DashboardPage() {
                 <tbody>
                   {recent.map((r) => (
                     <tr key={r.id} className="border-b border-border/40 last:border-0">
-                      <td className="py-1.5 pr-3 whitespace-nowrap">{new Date(r.ts * 1000).toLocaleString("zh-CN")}</td>
+                      <td className="whitespace-nowrap py-1.5 pr-3">{new Date(r.ts * 1000).toLocaleString("zh-CN")}</td>
                       <td className="py-1.5 pr-3"><code className="text-[10px]">{r.model}</code></td>
                       <td className="py-1.5 pr-3">
                         <Badge variant={r.status === "success" ? "secondary" : "destructive"} className="text-[10px]">

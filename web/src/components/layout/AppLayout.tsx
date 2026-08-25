@@ -148,7 +148,7 @@ export default function AppLayout() {
           <LogoMark className="h-6 w-6" />
           <span className="font-semibold">U1S12API</span>
         </header>
-        <div className="mx-auto w-full max-w-6xl px-6 py-6">
+        <div className="mx-auto w-full max-w-[1400px] px-4 py-4">
           <Outlet />
         </div>
       </main>

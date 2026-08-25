@@ -178,6 +178,7 @@ export interface RequestStats {
   avg_duration_ms: number
   by_model: Record<string, RequestStatsEntry>
   by_api_key: Record<string, RequestStatsEntry>
+  by_upstream_key: Record<string, RequestStatsEntry>
 }
 
 export type StatsRange = "1d" | "3d" | "7d" | "30d" | "all"

@@ -539,7 +539,40 @@ func (s *Store) RequestStats(days int) (*RequestStatsResult, error) {
 		r.ByAPIKey[name] = e
 	}
 
+	// 按上游 U1S1 Key（upstream_key_id → 掩码 key 标签）
+	if r.ByUpstreamKey == nil {
+		r.ByUpstreamKey = map[string]RequestStatsEntry{}
+	}
+	urows, err := s.db.Query(`SELECT r.upstream_key_id, k.key, COUNT(*), COALESCE(SUM(r.input_tokens),0), COALESCE(SUM(r.output_tokens),0), COALESCE(SUM(r.total_tokens),0)
+		FROM requests r LEFT JOIN upstream_keys k ON r.upstream_key_id = k.id
+		WHERE r.upstream_key_id > 0`+andWhereSince(since)+`
+		GROUP BY r.upstream_key_id ORDER BY SUM(r.total_tokens) DESC;`, sarg(since))
+	if err != nil {
+		return nil, err
+	}
+	defer urows.Close()
+	for urows.Next() {
+		var id int64
+		var key string
+		var e RequestStatsEntry
+		if err := urows.Scan(&id, &key, &e.Count, &e.PromptTokens, &e.CompletionTokens, &e.TotalTokens); err != nil {
+			return nil, err
+		}
+		label := fmt.Sprintf("#%d", id)
+		if key != "" {
+			label = MaskKey(key)
+		}
+		r.ByUpstreamKey[label] = e
+	}
+
 	return &r, nil
+}
+
+func andWhereSince(since int64) string {
+	if since > 0 {
+		return " AND ts>=?"
+	}
+	return ""
 }
 
 // RequestStatsResult 统计结果。
@@ -551,6 +584,7 @@ type RequestStatsResult struct {
 	AvgDurationMs float64                       `json:"avg_duration_ms"`
 	ByModel      map[string]RequestStatsEntry   `json:"by_model"`
 	ByAPIKey     map[string]RequestStatsEntry   `json:"by_api_key"`
+	ByUpstreamKey map[string]RequestStatsEntry  `json:"by_upstream_key"`
 }
 
 // RequestStatsEntry 单条聚合。
