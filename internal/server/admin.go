@@ -531,6 +531,27 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	writeAPIData(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
+func (s *Server) handleRequestStats(w http.ResponseWriter, r *http.Request) {
+	daysStr := r.URL.Query().Get("range")
+	days := 0 // 全部
+	switch daysStr {
+	case "1d":
+		days = 1
+	case "3d":
+		days = 3
+	case "7d":
+		days = 7
+	case "30d":
+		days = 30
+	}
+	stats, err := s.store.RequestStats(days)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeAPIData(w, http.StatusOK, stats)
+}
+
 func (s *Server) handleClearRequests(w http.ResponseWriter, _ *http.Request) {
 	if err := s.store.ClearRequests(); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())

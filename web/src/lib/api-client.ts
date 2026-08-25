@@ -135,6 +135,12 @@ export const api = {
   },
   clearRequests: () => request<unknown>("/requests", { method: "DELETE" }),
 
+  // 请求统计
+  requestStats: (range: string = "all") =>
+    request<import("@/types").RequestStats>(
+      `/requests/stats?range=${range}`,
+    ),
+
   // 设置
   settings: () => request<SettingsData>("/settings"),
   saveSettings: (patch: {

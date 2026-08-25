@@ -51,6 +51,7 @@ export interface RecentRequest {
   cost_usd: number
   duration_ms: number
   error: string
+  client_ip: string
 }
 
 export interface FingerprintInfo {
@@ -159,6 +160,27 @@ export interface LocalKeyItem {
 export interface LocalKeysData {
   keys: LocalKeyItem[]
 }
+
+// ---- 请求统计 ----
+
+export interface RequestStatsEntry {
+  count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+export interface RequestStats {
+  total: number
+  success: number
+  error: number
+  total_tokens: number
+  avg_duration_ms: number
+  by_model: Record<string, RequestStatsEntry>
+  by_api_key: Record<string, RequestStatsEntry>
+}
+
+export type StatsRange = "1d" | "3d" | "7d" | "30d" | "all"
 
 // ---- 请求记录 ----
 

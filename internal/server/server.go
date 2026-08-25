@@ -180,6 +180,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /admin/api/local-keys/{name}", s.requireAdmin(s.handleDeleteLocalKey))
 	mux.HandleFunc("POST /admin/api/local-keys/{name}/copy", s.requireAdmin(s.handleCopyLocalKey))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
+	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))
 	mux.HandleFunc("GET /admin/api/settings", s.requireAdmin(s.handleGetSettings))
 	mux.HandleFunc("PUT /admin/api/settings", s.requireAdmin(s.handleSaveSettings))
@@ -212,6 +213,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		presented := extractAPIKey(r)
 		if presented == "" {
+			logger.Warnf("API 鉴权失败：缺少 API Key，ip=%s path=%s", clientIP(r), r.URL.Path)
 			writeOpenAIError(w, http.StatusUnauthorized, "missing_api_key", "缺少 API Key：请以 Authorization: Bearer sk-... 或 X-API-Key 提供")
 			return
 		}
@@ -221,6 +223,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if name == "" {
+			logger.Warnf("API 鉴权失败：key 无效或已禁用，ip=%s path=%s key=%s…", clientIP(r), r.URL.Path, truncate(presented, 12))
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "API Key 无效或已禁用")
 			return
 		}
@@ -283,6 +286,20 @@ func (s *Server) isAdminAuthenticated(r *http.Request) bool {
 }
 
 func clientIP(r *http.Request) string {
+	// 反向代理（nginx）场景：优先取代理转发的真实 IP。
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		// 取最左的非空项（发起端）。
+		if i := strings.Index(fwd, ","); i >= 0 {
+			fwd = fwd[:i]
+		}
+		fwd = strings.TrimSpace(fwd)
+		if fwd != "" {
+			return fwd
+		}
+	}
+	if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
+		return real
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

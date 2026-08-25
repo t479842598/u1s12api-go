@@ -479,6 +479,102 @@ func requestWhere(f RequestFilter) (string, []any) {
 	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
+// RequestStats 按时间范围聚合请求统计（含模型/API Key 分解）。
+func (s *Store) RequestStats(days int) (*RequestStatsResult, error) {
+	loc := time.FixedZone("CST", 8*3600)
+	var since int64
+	if days > 0 {
+		since = time.Now().In(loc).AddDate(0, 0, -days).Unix()
+	}
+
+	var r RequestStatsResult
+	// 总体统计
+	err := s.db.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN status='error'  THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(total_tokens),0),
+		COALESCE(AVG(duration_ms),0)
+		FROM requests`+
+		addWhereSince(since)+`;`, sarg(since)).Scan(
+		&r.Total, &r.Success, &r.Error, &r.TotalTokens, &r.AvgDurationMs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 按模型
+	if r.ByModel == nil {
+		r.ByModel = map[string]RequestStatsEntry{}
+	}
+	mrows, err := s.db.Query(`SELECT model, COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(total_tokens),0)
+		FROM requests`+addWhereSince(since)+` GROUP BY model ORDER BY SUM(total_tokens) DESC;`, sarg(since))
+	if err != nil {
+		return nil, err
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var model string
+		var e RequestStatsEntry
+		if err := mrows.Scan(&model, &e.Count, &e.PromptTokens, &e.CompletionTokens, &e.TotalTokens); err != nil {
+			return nil, err
+		}
+		r.ByModel[model] = e
+	}
+
+	// 按 API Key
+	if r.ByAPIKey == nil {
+		r.ByAPIKey = map[string]RequestStatsEntry{}
+	}
+	krows, err := s.db.Query(`SELECT api_key_name, COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(total_tokens),0)
+		FROM requests`+addWhereSince(since)+` GROUP BY api_key_name ORDER BY SUM(total_tokens) DESC;`, sarg(since))
+	if err != nil {
+		return nil, err
+	}
+	defer krows.Close()
+	for krows.Next() {
+		var name string
+		var e RequestStatsEntry
+		if err := krows.Scan(&name, &e.Count, &e.PromptTokens, &e.CompletionTokens, &e.TotalTokens); err != nil {
+			return nil, err
+		}
+		r.ByAPIKey[name] = e
+	}
+
+	return &r, nil
+}
+
+// RequestStatsResult 统计结果。
+type RequestStatsResult struct {
+	Total        int64                          `json:"total"`
+	Success      int64                          `json:"success"`
+	Error        int64                          `json:"error"`
+	TotalTokens  int64                          `json:"total_tokens"`
+	AvgDurationMs float64                       `json:"avg_duration_ms"`
+	ByModel      map[string]RequestStatsEntry   `json:"by_model"`
+	ByAPIKey     map[string]RequestStatsEntry   `json:"by_api_key"`
+}
+
+// RequestStatsEntry 单条聚合。
+type RequestStatsEntry struct {
+	Count            int64 `json:"count"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+func addWhereSince(since int64) string {
+	if since > 0 {
+		return " WHERE ts>=?"
+	}
+	return ""
+}
+
+func sarg(since int64) any {
+	if since > 0 {
+		return since
+	}
+	return nil
+}
+
 // ClearRequests 清空请求记录。
 func (s *Store) ClearRequests() error {
 	_, err := s.db.Exec(`DELETE FROM requests`)

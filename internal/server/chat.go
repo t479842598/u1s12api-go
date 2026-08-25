@@ -186,6 +186,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		cost := s.estimateCost(req.Model, usageIn, usageOut)
 		s.recordRequestFull(localKeyName, req.Model, ks.ID, req.Stream, started,
 			resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
+		logger.Infof("chat 完成 key#%d model=%s stream=%v status=%s in=%d out=%d dur=%dms ip=%s",
+			ks.ID, req.Model, req.Stream, status, usageIn, usageOut,
+			time.Since(started).Milliseconds(), clientIP(r))
 		return
 	}
 
