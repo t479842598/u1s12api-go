@@ -10,3 +10,4 @@ u1s12api-*
 static/*
 !static/.gitkeep
 u1s12api-linux-*
+.lrnev/
