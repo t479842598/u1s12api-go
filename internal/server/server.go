@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/t479842598/u1s12api-go/internal/config"
@@ -29,11 +30,11 @@ var logger = logging.Named("u1s12api")
 
 // Server 持有运行时依赖；settings 支持热替换。
 type Server struct {
-	cfg        atomicValue // *config.Settings
-	pool       *upstream.Pool
-	store      *store.Store
-	fp         *fingerprint.Manager
-	staticFS   fs.FS
+	cfg         atomicValue // *config.Settings
+	pool        *upstream.Pool
+	store       *store.Store
+	fp          *fingerprint.Manager
+	staticFS    fs.FS
 	projectRoot string
 
 	clientMu    sync.Mutex
@@ -43,8 +44,13 @@ type Server struct {
 
 	throttle *loginThrottle
 
-	modelsMu      sync.Mutex
-	modelsCache   *modelsCacheEntry
+	// 北京时间 0 点配额定时刷新：quotaChecking 让自动/手动全量检查互斥，
+	// nextQuotaCheckAt 记录下次排程时间（unix 秒，0=未排程）供管理端查询。
+	quotaChecking    atomic.Bool
+	nextQuotaCheckAt atomic.Int64
+
+	modelsMu    sync.Mutex
+	modelsCache *modelsCacheEntry
 }
 
 type atomicValue struct {
@@ -52,11 +58,11 @@ type atomicValue struct {
 	m sync.RWMutex
 }
 
-func (a *atomicValue) Load() any { a.m.RLock(); defer a.m.RUnlock(); return a.v }
+func (a *atomicValue) Load() any   { a.m.RLock(); defer a.m.RUnlock(); return a.v }
 func (a *atomicValue) Store(v any) { a.m.Lock(); defer a.m.Unlock(); a.v = v }
 
 type modelsCacheEntry struct {
-	resp     *upstream.ModelsResponse
+	resp      *upstream.ModelsResponse
 	fetchedAt time.Time
 }
 
@@ -89,6 +95,12 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 	// 后台周期拉取模型列表：预热价格缓存（用于成本估算），对齐官方 CLI
 	// 启动即刷新模型的习惯。无可用 key 时静默失败，下轮重试。
 	go s.refreshModelsLoop()
+
+	// 北京时间 0 点额度重置后自动全量刷新上游 Key 配额
+	// （QUOTA_AUTO_REFRESH=0 关闭；测试直构 Settings 零值 false 不启动）。
+	if cfg.QuotaAutoRefresh {
+		go s.quotaAutoRefreshLoop()
+	}
 	return s, nil
 }
 
@@ -382,7 +394,7 @@ type loginThrottle struct {
 }
 
 type failureState struct {
-	count    int
+	count        int
 	blockedUntil time.Time
 }
 

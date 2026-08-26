@@ -112,12 +112,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.getSettings()
 	fp := s.fp.Current()
 	writeAPIData(w, http.StatusOK, map[string]any{
-		"today":   today,
-		"totals":  allTime,
-		"keys":    keyStats,
-		"daily":   daily,
-		"models":  models,
-		"recent":  recent,
+		"today":  today,
+		"totals": allTime,
+		"keys":   keyStats,
+		"daily":  daily,
+		"models": models,
+		"recent": recent,
 		"fingerprint": map[string]any{
 			"profile":    fp.ID,
 			"label":      fp.Label,
@@ -378,30 +378,20 @@ func (s *Server) handleCheckUpstreamQuota(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleCheckAllQuotas(w http.ResponseWriter, _ *http.Request) {
-	keys, err := s.store.ListUpstreamKeys()
+	// 与北京时间 0 点的自动刷新互斥：同一时间只允许一轮全量检查。
+	if !s.quotaChecking.CompareAndSwap(false, true) {
+		writeAPIError(w, http.StatusConflict, "已有一次全量配额检查在进行中（可能是定时刷新），请稍后再试")
+		return
+	}
+	defer s.quotaChecking.Store(false)
+
+	results, okCount, total, err := s.checkAllQuotas()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	type result struct {
-		ID    int64  `json:"id"`
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	results := make([]result, 0, len(keys))
-	okCount := 0
-	for _, k := range keys {
-		_, cerr := s.checkQuotaFor(k.ID)
-		if cerr != nil {
-			results = append(results, result{ID: k.ID, OK: false, Error: truncate(cerr.Error(), 200)})
-			continue
-		}
-		results = append(results, result{ID: k.ID, OK: true})
-		okCount++
-		time.Sleep(300 * time.Millisecond) // 温和限速，避免触发风控
-	}
-	logger.Infof("批量检查配额完成: %d/%d 成功", okCount, len(keys))
-	writeAPIData(w, http.StatusOK, map[string]any{"results": results, "ok": okCount, "total": len(keys)})
+	logger.Infof("批量检查配额完成: %d/%d 成功", okCount, total)
+	writeAPIData(w, http.StatusOK, map[string]any{"results": results, "ok": okCount, "total": total})
 }
 
 // ---- 本地分发 Key ----
@@ -566,16 +556,18 @@ func (s *Server) handleClearRequests(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.getSettings()
 	writeAPIData(w, http.StatusOK, map[string]any{
-		"host":                cfg.Host,
-		"port":                cfg.Port,
-		"has_password":        cfg.AdminPassword != "",
-		"upstream_base_url":   cfg.UpstreamBaseURL,
-		"egress_proxy":        cfg.EgressProxyURL,
-		"fingerprint_profile": cfg.FingerprintProfile,
-		"u1s1_version":        cfg.U1S1Version,
-		"log_level":           cfg.LogLevel,
-		"profiles":            profileSummaries(),
-		"current_profile":     s.fp.Current().ID,
+		"host":                  cfg.Host,
+		"port":                  cfg.Port,
+		"has_password":          cfg.AdminPassword != "",
+		"upstream_base_url":     cfg.UpstreamBaseURL,
+		"egress_proxy":          cfg.EgressProxyURL,
+		"fingerprint_profile":   cfg.FingerprintProfile,
+		"u1s1_version":          cfg.U1S1Version,
+		"log_level":             cfg.LogLevel,
+		"profiles":              profileSummaries(),
+		"current_profile":       s.fp.Current().ID,
+		"quota_auto_refresh":    cfg.QuotaAutoRefresh,
+		"next_quota_refresh_at": s.nextQuotaCheckAtSnapshot(),
 	})
 }
 
@@ -594,11 +586,11 @@ func profileSummaries() []map[string]string {
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		UpstreamBaseURL   *string `json:"upstream_base_url,omitempty"`
-		EgressProxy       *string `json:"egress_proxy,omitempty"`
+		UpstreamBaseURL    *string `json:"upstream_base_url,omitempty"`
+		EgressProxy        *string `json:"egress_proxy,omitempty"`
 		FingerprintProfile *string `json:"fingerprint_profile,omitempty"`
-		U1S1Version       *string `json:"u1s1_version,omitempty"`
-		AdminPassword     *string `json:"admin_password,omitempty"`
+		U1S1Version        *string `json:"u1s1_version,omitempty"`
+		AdminPassword      *string `json:"admin_password,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "请求体不是合法 JSON")
@@ -735,11 +727,11 @@ func (s *Server) handleChatTest(w http.ResponseWriter, r *http.Request) {
 	}
 	inTok, outTok := tokensFrom(parsed.Usage)
 	writeAPIData(w, http.StatusOK, map[string]any{
-		"content":     content,
-		"model":       parsed.Model,
-		"input_tokens": inTok,
+		"content":       content,
+		"model":         parsed.Model,
+		"input_tokens":  inTok,
 		"output_tokens": outTok,
-		"duration_ms":  time.Since(started).Milliseconds(),
+		"duration_ms":   time.Since(started).Milliseconds(),
 	})
 }
 

@@ -25,6 +25,7 @@ type Settings struct {
 	LogLevel           string // debug|info|warn|error
 	LogColor           bool
 	Debug              bool
+	QuotaAutoRefresh   bool // 北京时间 0 点额度重置后自动全量刷新上游 Key 配额
 	FirstRun           bool // 本次启动是否新生成了 ADMIN_PASSWORD（用于启动时打印提醒）
 }
 
@@ -46,6 +47,7 @@ const (
 	KeyLogLevel           = "LOG_LEVEL"
 	KeyLogColor           = "LOG_COLOR"
 	KeyDebug              = "DEBUG"
+	KeyQuotaAutoRefresh   = "QUOTA_AUTO_REFRESH"
 )
 
 var mu sync.Mutex
@@ -79,6 +81,7 @@ func Load(projectRoot string) (*Settings, error) {
 		LogLevel:           getStr(kv, KeyLogLevel, "info"),
 		LogColor:           getBool(kv, KeyLogColor, true),
 		Debug:              getBool(kv, KeyDebug, false),
+		QuotaAutoRefresh:   getBool(kv, KeyQuotaAutoRefresh, true), // 默认开启
 		FirstRun:           firstRun,
 	}
 	applyOSEnv(s)
@@ -148,6 +151,7 @@ func Save(projectRoot string, patch map[string]string) (*Settings, error) {
 		LogLevel:           getStr(kv, KeyLogLevel, "info"),
 		LogColor:           getBool(kv, KeyLogColor, true),
 		Debug:              getBool(kv, KeyDebug, false),
+		QuotaAutoRefresh:   getBool(kv, KeyQuotaAutoRefresh, true),
 	}
 	applyOSEnv(s)
 	return s, nil
@@ -166,6 +170,7 @@ func PatchableFields(s *Settings) map[string]string {
 		KeyLogLevel:           s.LogLevel,
 		KeyLogColor:           boolStr(s.LogColor),
 		KeyDebug:              boolStr(s.Debug),
+		KeyQuotaAutoRefresh:   boolStr(s.QuotaAutoRefresh),
 	}
 }
 
@@ -204,6 +209,7 @@ func readEnvLines(path string) []string {
 # EGRESS_PROXY=socks5://127.0.0.1:7897
 # FINGERPRINT_PROFILE=auto
 # U1S1_VERSION=0.19.5
+# QUOTA_AUTO_REFRESH=true   ← 北京时间 0 点额度重置后自动刷新全部上游 Key 配额
 `
 		_ = os.WriteFile(path, []byte(defaults), 0o600)
 		return nil

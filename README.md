@@ -8,6 +8,7 @@
 - **请求头指纹模拟**：与官方 u1s1-cli 0.19.5 完全一致（UA + X-Stainless-* + x-u1s1-version）
 - **多 Key 池**：轮询调度，单 Key 额度耗尽自动冷却至次日北京时间 0 点，401 自动禁用
 - **配额查询**：一键查看每把 Key 的今日剩余额度 / 永久余额（调用上游 `/v1/me`）
+- **配额自动刷新**：每天北京时间 0 点额度重置后自动全量刷新全部上游 Key 配额（`QUOTA_AUTO_REFRESH`，默认开启）
 - **管理后台**：Dashboard / Key 管理 / 请求记录 / 运行日志 / 模型测试 / 设置
 - **一键导入**：粘贴多行 `u1s1-xxx` 即完成批量导入
 - **单二进制部署**：前端 embed，交叉编译 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0`
@@ -38,6 +39,7 @@ open http://127.0.0.1:8080/admin/
 | `FINGERPRINT_PROFILE` | `auto` | 头指纹档案 |
 | `U1S1_VERSION` | `0.19.5` | x-u1s1-version 头 |
 | `LOG_LEVEL` | `info` | 日志级别 |
+| `QUOTA_AUTO_REFRESH` | `true` | 北京时间 0 点后自动全量刷新上游 Key 配额 |
 
 ## 指纹档案
 

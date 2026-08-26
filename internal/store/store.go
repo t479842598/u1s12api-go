@@ -98,23 +98,23 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // UpstreamKey 上游 key 记录。
 type UpstreamKey struct {
-	ID                   int64   `json:"id"`
-	Key                  string  `json:"key"`
-	KeyMasked            string  `json:"key_masked"`
-	Note                 string  `json:"note"`
-	Status               string  `json:"status"` // active|cooldown|disabled
-	CooldownUntil        int64   `json:"cooldown_until"`
-	LastError            string  `json:"last_error"`
-	Email                string  `json:"email"`
-	TokensPerUSD         float64 `json:"tokens_per_usd"`
+	ID                    int64   `json:"id"`
+	Key                   string  `json:"key"`
+	KeyMasked             string  `json:"key_masked"`
+	Note                  string  `json:"note"`
+	Status                string  `json:"status"` // active|cooldown|disabled
+	CooldownUntil         int64   `json:"cooldown_until"`
+	LastError             string  `json:"last_error"`
+	Email                 string  `json:"email"`
+	TokensPerUSD          float64 `json:"tokens_per_usd"`
 	DailyFreeRemainingUSD float64 `json:"daily_free_remaining_usd"`
-	RemainingUSD         float64 `json:"remaining_usd"`
-	FreeClaim            string  `json:"free_claim"`
-	QuotaCheckedAt       int64   `json:"quota_checked_at"`
-	TotalRequests        int64   `json:"total_requests"`
-	TotalTokens          int64   `json:"total_tokens"`
-	CreatedAt            int64   `json:"created_at"`
-	LastUsedAt           int64   `json:"last_used_at"`
+	RemainingUSD          float64 `json:"remaining_usd"`
+	FreeClaim             string  `json:"free_claim"`
+	QuotaCheckedAt        int64   `json:"quota_checked_at"`
+	TotalRequests         int64   `json:"total_requests"`
+	TotalTokens           int64   `json:"total_tokens"`
+	CreatedAt             int64   `json:"created_at"`
+	LastUsedAt            int64   `json:"last_used_at"`
 }
 
 // MaskKey 把 u1s1-xxxxxxxx... 显示为 u1s1-xxxx…xxxx。
@@ -196,6 +196,17 @@ func (s *Store) UpdateUpstreamQuota(id int64, email string, tokensPerUSD, dailyR
 		cooldown_until=CASE WHEN status='cooldown' THEN 0 ELSE cooldown_until END
 		WHERE id=?`, email, tokensPerUSD, dailyRemaining, remaining, freeClaim, time.Now().Unix(), id)
 	return err
+}
+
+// LatestUpstreamQuotaCheckedAt 全部上游 key 中最近的配额检查时间（unix 秒）；
+// 无 key 或从未检查过返回 0。供北京时间 0 点自动刷新判断「今天是否已刷过」。
+func (s *Store) LatestUpstreamQuotaCheckedAt() int64 {
+	var v sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(quota_checked_at) FROM upstream_keys`).Scan(&v)
+	if err != nil || !v.Valid {
+		return 0
+	}
+	return v.Int64
 }
 
 // TouchUpstreamKey 更新最后使用时间与累计计数。
@@ -373,21 +384,21 @@ func (s *Store) GetLocalKeyByName(name string) (*LocalKey, error) {
 
 // RequestRecord 一条转发记录。
 type RequestRecord struct {
-	ID           int64   `json:"id"`
-	TS           int64   `json:"ts"`
-	APIKeyName   string  `json:"api_key_name"`
-	Model        string  `json:"model"`
-	UpstreamKeyID int64  `json:"upstream_key_id"`
-	Stream       bool    `json:"stream"`
-	Status       string  `json:"status"`
-	HTTPStatus   int     `json:"http_status"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	TotalTokens  int64   `json:"total_tokens"`
-	CostUSD      float64 `json:"cost_usd"`
-	DurationMS   int64   `json:"duration_ms"`
-	Error        string  `json:"error"`
-	ClientIP     string  `json:"client_ip"`
+	ID            int64   `json:"id"`
+	TS            int64   `json:"ts"`
+	APIKeyName    string  `json:"api_key_name"`
+	Model         string  `json:"model"`
+	UpstreamKeyID int64   `json:"upstream_key_id"`
+	Stream        bool    `json:"stream"`
+	Status        string  `json:"status"`
+	HTTPStatus    int     `json:"http_status"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	TotalTokens   int64   `json:"total_tokens"`
+	CostUSD       float64 `json:"cost_usd"`
+	DurationMS    int64   `json:"duration_ms"`
+	Error         string  `json:"error"`
+	ClientIP      string  `json:"client_ip"`
 }
 
 // InsertRequest 落库。
@@ -412,11 +423,11 @@ func b2i(b bool) int {
 
 // RequestFilter 列表过滤条件。
 type RequestFilter struct {
-	Model    string
-	Status   string
-	KeyName  string
-	Limit    int
-	Offset   int
+	Model   string
+	Status  string
+	KeyName string
+	Limit   int
+	Offset  int
 }
 
 // ListRequests 分页查询（新→旧）。
@@ -577,14 +588,14 @@ func andWhereSince(since int64) string {
 
 // RequestStatsResult 统计结果。
 type RequestStatsResult struct {
-	Total        int64                          `json:"total"`
-	Success      int64                          `json:"success"`
-	Error        int64                          `json:"error"`
-	TotalTokens  int64                          `json:"total_tokens"`
-	AvgDurationMs float64                       `json:"avg_duration_ms"`
-	ByModel      map[string]RequestStatsEntry   `json:"by_model"`
-	ByAPIKey     map[string]RequestStatsEntry   `json:"by_api_key"`
-	ByUpstreamKey map[string]RequestStatsEntry  `json:"by_upstream_key"`
+	Total         int64                        `json:"total"`
+	Success       int64                        `json:"success"`
+	Error         int64                        `json:"error"`
+	TotalTokens   int64                        `json:"total_tokens"`
+	AvgDurationMs float64                      `json:"avg_duration_ms"`
+	ByModel       map[string]RequestStatsEntry `json:"by_model"`
+	ByAPIKey      map[string]RequestStatsEntry `json:"by_api_key"`
+	ByUpstreamKey map[string]RequestStatsEntry `json:"by_upstream_key"`
 }
 
 // RequestStatsEntry 单条聚合。
@@ -617,10 +628,10 @@ func (s *Store) ClearRequests() error {
 
 // DailyUsage 按天聚合。
 type DailyUsage struct {
-	Date      string  `json:"date"`
-	Requests  int64   `json:"requests"`
-	TotalTok  int64   `json:"total_tokens"`
-	CostUSD   float64 `json:"cost_usd"`
+	Date     string  `json:"date"`
+	Requests int64   `json:"requests"`
+	TotalTok int64   `json:"total_tokens"`
+	CostUSD  float64 `json:"cost_usd"`
 }
 
 // DailyUsage 最近 days 天的逐日用量（含今天，缺数据的天补零）。
