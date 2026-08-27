@@ -1,12 +1,12 @@
 // Package fingerprint 构造与官方 u1s1 CLI 一致的请求头指纹。
 //
 // u1s1 CLI（pi-coding-agent 换皮）向 https://api.u1s1.io/v1 发起 chat/completions
-// 时由 OpenAI SDK v6.40.0 附带以下指纹头（逆向自 u1s1-cli 1.2.0 dist）：
+// 时由 OpenAI SDK v6.40.0 附带以下指纹头（逆向自 u1s1-cli 1.2.1 dist）：
 //
 //	Authorization: Bearer u1s1-xxx
 //	User-Agent: pi ({os.platform()} {os.release()}; {os.arch()})
 //	    例: pi (darwin 24.6.0; arm64)
-//	x-u1s1-version: 1.2.0          ← 网关按此识别客户端版本
+//	x-u1s1-version: 1.2.1          ← 网关按此识别客户端版本
 //	X-Stainless-Lang: js
 //	X-Stainless-Package-Version: 6.40.0
 //	X-Stainless-OS: MacOS|Linux|Windows   （normalizePlatform 映射）

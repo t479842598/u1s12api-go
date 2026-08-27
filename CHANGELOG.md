@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.3 (2026-08-27)
+
+### 变更
+
+- **请求头指纹同步官方 u1s1-cli v1.2.1**：`x-u1s1-version` 默认值从 `1.2.0` 升到 `1.2.1`（UA 与 X-Stainless-* 不变，官方 SDK 仍为 6.40.0，pi-coding-agent 仍 0.84.3）；`.env` 的 `U1S1_VERSION`、README 与后台设置页 placeholder 同步更新
+
 ## v0.4.2 (2026-08-27)
 
 ### 变更
