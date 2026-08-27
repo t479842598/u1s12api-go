@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 (2026-08-27)
+
+### 修复
+
+- **兼容 OpenAI o1/GPT-5 系客户端**：CPA 等新客户端发送的 `role=developer` 在转发给上游前统一归一化为 `system`；上游收紧后原样转发了直接 400 "unknown variant `developer`"。附带逐条消息字段保留了 integration/unit 测试
+
 ## v0.4.0 (2026-08-26)
 
 ### 新增

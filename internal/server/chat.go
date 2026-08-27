@@ -116,12 +116,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "missing_model", "缺少 model 字段")
 		return
 	}
-	forwardBody := body
+	forwardBody := normalizeChatRoles(body)
 	// 流式请求补 stream_options.include_usage=true —— 与官方 CLI 行为一致，
 	// 同时让本网关能从最后一个 chunk 统计 token 用量。
 	if req.Stream && len(req.StreamOptions) == 0 {
 		var m map[string]any
-		if json.Unmarshal(body, &m) == nil && m != nil {
+		if json.Unmarshal(forwardBody, &m) == nil && m != nil {
 			m["stream_options"] = map[string]any{"include_usage": true}
 			if b, merr := json.Marshal(m); merr == nil {
 				forwardBody = b
