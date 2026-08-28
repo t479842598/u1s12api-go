@@ -270,6 +270,8 @@ export interface AccountItem {
   device_name: string
   last_checkin_at: number
   login_checkin_remaining: number
+  last_web_checkin_at: number
+  web_checkin_status?: string
   total_requests: number
   total_tokens: number
   created_at: number

@@ -15,6 +15,7 @@ import (
 	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
 	"github.com/t479842598/u1s12api-go/internal/upstream"
+	"github.com/t479842598/u1s12api-go/internal/webcheckin"
 )
 
 // pendingDevice 一次进行中的设备授权（内存态，不落盘；服务重启需重新授权）。
@@ -185,4 +186,9 @@ func (s *Server) deviceClient() *upstream.DeviceClient {
 	return upstream.NewDeviceClient(cfg.UpstreamBaseURL, cfg.EgressProxyURL,
 		func() string { return s.getSettings().U1S1Version },
 		func() fingerprint.Profile { return s.fp.Current() })
+}
+
+// webCheckinService u1s1 网页签到服务（capcat 求解 + 登录 + claim），走同一出口代理。
+func (s *Server) webCheckinService() (*webcheckin.Service, error) {
+	return webcheckin.New(s.getSettings().EgressProxyURL)
 }

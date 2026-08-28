@@ -98,6 +98,8 @@ func (s *Store) migrate() error {
 			authorized INTEGER NOT NULL DEFAULT 0,
 			last_checkin_at INTEGER NOT NULL DEFAULT 0,
 			login_checkin_remaining INTEGER NOT NULL DEFAULT -1,
+			last_web_checkin_at INTEGER NOT NULL DEFAULT 0,
+			web_checkin_status TEXT NOT NULL DEFAULT '',
 			total_requests INTEGER NOT NULL DEFAULT 0,
 			total_tokens INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
@@ -106,6 +108,15 @@ func (s *Store) migrate() error {
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	// 旧库补列（已存在则跳过）。
+	for _, stmt := range []string{
+		`ALTER TABLE accounts ADD COLUMN last_web_checkin_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE accounts ADD COLUMN web_checkin_status TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
@@ -764,25 +775,27 @@ type Account struct {
 	DevicePublicJWK      string `json:"device_public_jwk"`
 	DeviceName           string `json:"device_name"`
 	Authorized           bool   `json:"authorized"`
-	LastCheckinAt        int64  `json:"last_checkin_at"`
-	LoginCheckinRemaining int64 `json:"login_checkin_remaining"`
-	TotalRequests        int64  `json:"total_requests"`
-	TotalTokens          int64  `json:"total_tokens"`
-	CreatedAt            int64  `json:"created_at"`
-	UpdatedAt            int64  `json:"updated_at"`
+	LastCheckinAt         int64  `json:"last_checkin_at"`
+	LoginCheckinRemaining int64  `json:"login_checkin_remaining"`
+	LastWebCheckinAt      int64  `json:"last_web_checkin_at"`
+	WebCheckinStatus      string `json:"web_checkin_status,omitempty"`
+	TotalRequests         int64  `json:"total_requests"`
+	TotalTokens           int64  `json:"total_tokens"`
+	CreatedAt             int64  `json:"created_at"`
+	UpdatedAt             int64  `json:"updated_at"`
 }
 
 const accountCols = `id,email,password,note,enabled,device_token,api_key,device_id,
 	device_private_jwk,device_public_jwk,device_name,authorized,last_checkin_at,
-	login_checkin_remaining,total_requests,total_tokens,created_at,updated_at`
+	login_checkin_remaining,last_web_checkin_at,web_checkin_status,total_requests,total_tokens,created_at,updated_at`
 
 func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	a := &Account{}
 	var enabled, authorized int
 	err := row.Scan(&a.ID, &a.Email, &a.Password, &a.Note, &enabled, &a.DeviceToken, &a.APIKey,
 		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &authorized,
-		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.TotalRequests, &a.TotalTokens,
-		&a.CreatedAt, &a.UpdatedAt)
+		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.LastWebCheckinAt, &a.WebCheckinStatus,
+		&a.TotalRequests, &a.TotalTokens, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -954,6 +967,13 @@ func (s *Store) TouchAccount(id int64, tokens int64) error {
 func (s *Store) MarkAccountCheckin(id int64, remaining int64) error {
 	_, err := s.db.Exec(`UPDATE accounts SET last_checkin_at=?, login_checkin_remaining=?, updated_at=? WHERE id=?`,
 		time.Now().Unix(), remaining, time.Now().Unix(), id)
+	return err
+}
+
+// MarkAccountWebCheckin 记录一次网页打卡结果（last_web_checkin_at + 状态文案）。
+func (s *Store) MarkAccountWebCheckin(id int64, status string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET last_web_checkin_at=?, web_checkin_status=?, updated_at=? WHERE id=?`,
+		time.Now().Unix(), status, time.Now().Unix(), id)
 	return err
 }
 

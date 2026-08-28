@@ -31,7 +31,7 @@ import {
 import { PageLoading } from "@/components/shared/PageLoading"
 import { CheckCircle2, Clock3, ExternalLink, Plus, RefreshCw, Unplug, Copy, KeyRound } from "lucide-react"
 
-// 打卡需要真浏览器（CapCAT），点按钮直接打开 U1S1 官网打卡页手动登录打卡
+// 打卡已改为服务端自动：capcat 人机验证 → 网页登录 → claim（纯 API）；「去打卡」按钮仅保留手动兜底
 const U1S1_CHECKIN_URL = "https://u1s1.io/dashboard#sec-usage"
 
 function fmtTime(unix: number): string {
@@ -301,11 +301,11 @@ export default function AccountsPage() {
     try {
       const r = await api.checkinOne(a.id)
       if (r.ok) {
-        toast.success(`${a.email_masked} 额度已刷新`)
+        toast.success(`${a.email_masked} 打卡完成`)
       }
       load()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "额度查询失败")
+      toast.error(err instanceof Error ? err.message : "打卡失败")
     } finally {
       setBusy(null)
     }
@@ -352,7 +352,7 @@ export default function AccountsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">授权账号</h1>
           <p className="text-sm text-muted-foreground">
-            共 {data.accounts.length} 个账号 · 已授权 {authCount} 个；点「复制账号/复制密码」取登录凭证 →「去打卡」打开官网打卡页登录，点“打卡领取 200 万 Token”（CapCAT 需真浏览器手动）
+            共 {data.accounts.length} 个账号 · 已授权 {authCount} 个；每日北京时间 0 点后自动网页打卡（capcat 人机验证 + 登录 + claim）领取 200 万 Token，也可点「打卡」手动触发
           </p>
         </div>
         <div className="flex gap-2">
@@ -374,7 +374,7 @@ export default function AccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">账号列表</CardTitle>
-          <CardDescription>录入账号后发起设备授权，领取设备凭证（u1s1d- + api_key），用于模拟官方客户端；每日打卡：复制账号密码 →「去打卡」在官网手动登录领取</CardDescription>
+          <CardDescription>录入账号并保存官网密码后，服务端自动完成设备授权与每日网页打卡（capcat 人机验证纯 API 求解，无需真浏览器）；「去打卡」仅在需要时手动打开官网</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -417,12 +417,23 @@ export default function AccountsPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-xs">{fmtTokens(a.login_checkin_remaining)}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(a.last_checkin_at)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {a.web_checkin_status ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className={a.web_checkin_status.startsWith("失败") ? "text-red-600" : "text-emerald-700"}>
+                          {a.web_checkin_status}
+                        </span>
+                        <span className="text-muted-foreground">{fmtTime(a.last_web_checkin_at || a.last_checkin_at)}</span>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">{fmtTime(a.last_checkin_at)}</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2 flex-wrap">
                       {a.authorized ? (
                         <>
-                          <Button size="sm" variant="outline" title="打开官网打卡页手动登录打卡"
+                          <Button size="sm" variant="outline" title="打开官网打卡页（手动兜底）"
                             onClick={() => window.open(U1S1_CHECKIN_URL, "_blank")}>
                             <ExternalLink className="mr-1 h-3 w-3" />
                             去打卡
@@ -430,7 +441,7 @@ export default function AccountsPage() {
                           <Button size="sm" variant="ghost" disabled={busy === `checkin-${a.id}`}
                             onClick={() => checkinOne(a)}>
                             <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
-                            查额度
+                            打卡
                           </Button>
                         </>
                       ) : (
@@ -477,7 +488,7 @@ export default function AccountsPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>添加账号</DialogTitle>
-            <DialogDescription>邮箱+密码仅用于设备授权时浏览器登录一次，之后靠设备凭证自动签到。</DialogDescription>
+            <DialogDescription>邮箱+密码用于服务端自动登录打卡（每日领取 200 万 Token 加量包）与设备授权；密码仅存本机数据库。</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <Input placeholder="邮箱" value={addEmail} onChange={(e) => setAddEmail(e.target.value)} />

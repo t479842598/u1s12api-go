@@ -1,6 +1,15 @@
 # Changelog
 
-## v0.6.0 (2026-08-28)
+## v0.7.0 (2026-08-29)
+
+### 新增
+
+- **网页自动打卡（纯 API，无需真浏览器）**：逆向 capcat 人机验证 format-2 协议并落地为 Go 求解器——`POST /challenge` 取 rsw（重复模平方 `x^(2^t) mod N`）+ instrumentation（每次随机生成的确定性算术程序）两道挑战，`POST /redeem` 兑换 cap-token，随后 `POST /auth/password/login` 网页登录（拿会话 cookie）、`POST /api/packages/login-checkin/claim` 领取每日 200 万 Token 加量包。此前 capcat 的 instrumentation 反自动化探测（检测 Node/CDP/webdriver 等）被认为必须真浏览器才能过，实测其算术后段为确定性程序，用 goja 以最小 DOM stub 执行即可通过，全程纯 API
+- **新包 `internal/capcat`**：capcat 求解器（rsw 用 `math/big`，instrumentation 用 `github.com/dop251/goja` 执行随机算术段），出口走 `EGRESS_PROXY` 与主客户端一致；含 opt-in 真实求解测试（`CAPCAT_LIVE=1`）
+- **新包 `internal/webcheckin`**：u1s1 网页登录与打卡 claim 客户端（登录、claim 各需一个新 cap-token，token 一次性、约 10 分钟有效）
+- **签到链路改造**：有密码的授权账号自动走「网页打卡」（capcat 求解 → 登录 → claim），无密码账号回退设备凭证调 `/v1/me` 的旧机制；`accounts` 表新增 `last_web_checkin_at` / `web_checkin_status`（旧库自动 ALTER 补列），管理后台「授权账号」页展示每次打卡结果（成功文案 / 失败原因）
+- **单账号「打卡」按钮**：操作列「查额度」改为「打卡」，可手动触发单账号网页打卡（已打卡则返回「今天已经打过卡了」）
+
 
 ### 修复
 

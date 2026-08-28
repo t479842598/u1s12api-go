@@ -1,13 +1,16 @@
-// 每日自动签到：U1S1 官网「每日登录打卡」发放 200 万 Token 全模型加量包，
-// 仅限官方客户端使用。用设备凭证（DPoP 签名）调 GET /v1/me 即触发当日加量包发放。
+// 每日自动签到：U1S1 官网「每日登录打卡」发放 200 万 Token 全模型加量包。
+// 有密码的账号走网页打卡：capcat 人机验证 → 网页登录 → claim 领取加量包（纯 API，无需浏览器）；
+// 无密码的账号回退设备凭证（DPoP）调 GET /v1/me 的旧机制，尽力而为。
 // 服务端在北京时间 0 点后对每个已授权且启用的账号自动执行一次，并记录签到状态。
 package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/t479842598/u1s12api-go/internal/store"
 	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
 
@@ -26,7 +29,9 @@ type checkinResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// checkinOnce 单账号签到：用设备凭证调 /v1/me，读 login_checkin 剩余。
+// checkinOnce 单账号签到：
+//   - 有密码的账号走「网页打卡」：capcat 求解 → 网页登录 → claim 领取 200 万/日加量包；
+//   - 无密码的账号回退设备凭证调 /v1/me（旧机制，尽力而为）。
 func (s *Server) checkinOne(id int64) error {
 	acc, err := s.store.GetAccount(id)
 	if err != nil {
@@ -35,6 +40,41 @@ func (s *Server) checkinOne(id int64) error {
 	if !acc.Authorized || !acc.Enabled {
 		return nil
 	}
+	if acc.HasPassword {
+		return s.webCheckinOne(acc)
+	}
+	return s.dpopCheckinOne(acc)
+}
+
+// webCheckinOne 网页打卡：capcat → 登录 → claim，并记录状态。
+func (s *Server) webCheckinOne(acc *store.Account) error {
+	// scanAccount 不回明文密码，这里单独直查。
+	email, password, err := s.store.GetAccountCredential(acc.ID)
+	if err != nil {
+		return err
+	}
+	svc, err := s.webCheckinService()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	res, err := svc.CheckIn(ctx, email, password)
+	if err != nil {
+		_ = s.store.MarkAccountWebCheckin(acc.ID, "失败："+truncate(err.Error(), 200))
+		return err
+	}
+	_ = s.store.MarkAccountCheckin(acc.ID, res.Tokens)
+	status := fmt.Sprintf("已打卡 %d 万 Token（连续 %d 天）", res.Tokens/10000, res.Streak)
+	if res.Tokens > 0 && res.Tokens%10000 != 0 {
+		status = fmt.Sprintf("已打卡 %d Token（连续 %d 天）", res.Tokens, res.Streak)
+	}
+	_ = s.store.MarkAccountWebCheckin(acc.ID, status)
+	return nil
+}
+
+// dpopCheckinOne 旧机制：用设备凭证调 /v1/me 触发加量包发放。
+func (s *Server) dpopCheckinOne(acc *store.Account) error {
 	cred, err := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
 	if err != nil {
 		return err
@@ -50,7 +90,7 @@ func (s *Server) checkinOne(id int64) error {
 	if me.LoginCheckinRemaining != nil {
 		remaining = *me.LoginCheckinRemaining
 	}
-	return s.store.MarkAccountCheckin(id, remaining)
+	return s.store.MarkAccountCheckin(acc.ID, remaining)
 }
 
 // runCheckinAll 全量签到（手动接口 + 自动任务共用）。返回逐账号结果、成功数。
