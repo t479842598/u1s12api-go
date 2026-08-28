@@ -203,4 +203,9 @@ export const api = {
     request<DeviceConfirmResult>(`/accounts/${id}/device/confirm`, { method: "POST" }),
   checkAllCheckin: () =>
     request<CheckinAllResult>("/accounts/check-all-checkin", { method: "POST" }),
+  checkinOne: (id: number) =>
+    request<{ ok: boolean; login_checkin_remaining: number; last_checkin_at: number }>(
+      `/accounts/${id}/checkin`,
+      { method: "POST" },
+    ),
 }

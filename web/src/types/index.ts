@@ -287,6 +287,7 @@ export interface DeviceStartResult {
 }
 
 export interface DeviceConfirmResult {
+  status: string
   authorized: boolean
   device_id: string
   api_key: string

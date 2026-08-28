@@ -29,15 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { PageLoading } from "@/components/shared/PageLoading"
-import {
-  CheckCircle2,
-  Clock3,
-  ExternalLink,
-  Plus,
-  RefreshCw,
-  Trash2,
-  Unplug,
-} from "lucide-react"
+import { CheckCircle2, Clock3, ExternalLink, Plus, RefreshCw, Unplug, Copy } from "lucide-react"
 
 function fmtTime(unix: number): string {
   if (!unix) return "—"
@@ -65,10 +57,11 @@ export default function AccountsPage() {
   const [authOpen, setAuthOpen] = useState(false)
   const [authAcc, setAuthAcc] = useState<AccountItem | null>(null)
   const [verifyUrl, setVerifyUrl] = useState("")
-  const [expiresIn, setExpiresIn] = useState(0)
   const [countdown, setCountdown] = useState(0)
-  const [authState, setAuthState] = useState<"idle" | "confirming">("idle")
+  const [authState, setAuthState] = useState<"idle" | "confirming" | "done">("idle")
+  const [confirmMsg, setConfirmMsg] = useState("")
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const confirmPollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -89,6 +82,7 @@ export default function AccountsPage() {
   useEffect(() => {
     return () => {
       if (countdownTimer.current) clearInterval(countdownTimer.current)
+      if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
     }
   }, [])
 
@@ -141,9 +135,9 @@ export default function AccountsPage() {
       const r = await api.deviceStart(a.id)
       setAuthAcc(a)
       setVerifyUrl(r.verify_url)
-      setExpiresIn(r.expires_in)
       setCountdown(r.expires_in)
       setAuthState("idle")
+      setConfirmMsg("")
       setAuthOpen(true)
       if (countdownTimer.current) clearInterval(countdownTimer.current)
       countdownTimer.current = setInterval(() => {
@@ -156,18 +150,56 @@ export default function AccountsPage() {
     }
   }
 
+  const copyLink = () => {
+    navigator.clipboard.writeText(verifyUrl).then(() => {
+      toast.success("授权链接已复制")
+    }).catch(() => {
+      toast.error("复制失败，请手动复制")
+    })
+  }
+
   const confirmAuth = async () => {
     if (!authAcc) return
     setAuthState("confirming")
+    setConfirmMsg("正在确认授权，请稍候…")
     try {
-      await api.deviceConfirm(authAcc.id)
-      toast.success("设备授权成功")
-      if (countdownTimer.current) clearInterval(countdownTimer.current)
-      setAuthOpen(false)
-      load()
+      const maxTries = 180
+      for (let i = 0; i < maxTries; i++) {
+        const r = await api.deviceConfirm(authAcc.id)
+        if (r.status === "authorized") {
+          toast.success("设备授权成功")
+          setAuthState("done")
+          setConfirmMsg("授权成功，设备凭证已保存")
+          if (countdownTimer.current) clearInterval(countdownTimer.current)
+          if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
+          setTimeout(() => { setAuthOpen(false); load() }, 1500)
+          return
+        }
+        setConfirmMsg(`等待浏览器批准第 ${i + 1} 次…（请确认已在浏览器完成批准）`)
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+      }
+      toast.error("授权超时，请重新发起授权")
+      setAuthState("idle")
+      setConfirmMsg("")
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "授权确认失败")
       setAuthState("idle")
+      setConfirmMsg("")
+    }
+  }
+
+  const checkinOne = async (a: AccountItem) => {
+    setBusy(`checkin-${a.id}`)
+    try {
+      const r = await api.checkinOne(a.id)
+      if (r.ok) {
+        toast.success(`${a.email_masked} 签到成功`)
+      }
+      load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "签到失败")
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -191,19 +223,18 @@ export default function AccountsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">官网账号</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">签到管理</h1>
           <p className="text-sm text-muted-foreground">
-            共 {data.accounts.length} 个 · 已授权 {authCount} 个；授权后设备凭证用于消耗「仅限
-            u1s1 客户端使用」的加量包并每日自动签到
+            共 {data.accounts.length} 个账号 · 已授权 {authCount} 个；授权后每天自动签到领取 200 万 Token 加量包
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={checkAll} disabled={busy === "check-all" || authCount === 0}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${busy === "check-all" ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={checkAll} disabled={busy === "check-all" || authCount === 0}>
+            <RefreshCw className={`mr-1 h-4 w-4 ${busy === "check-all" ? "animate-spin" : ""}`} />
             全部签到
           </Button>
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="mr-1 h-4 w-4" />
             添加账号
           </Button>
         </div>
@@ -212,7 +243,7 @@ export default function AccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">账号列表</CardTitle>
-          <CardDescription>邮箱密码仅用于初始授权（浏览器登录一次）；设备凭证授权后自动签到</CardDescription>
+          <CardDescription>录入账号后发起设备授权，授权后每天自动签到领取加量包</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -220,7 +251,6 @@ export default function AccountsPage() {
               <TableRow>
                 <TableHead>账号</TableHead>
                 <TableHead>授权状态</TableHead>
-                <TableHead>设备</TableHead>
                 <TableHead>签到剩余</TableHead>
                 <TableHead>最近签到</TableHead>
                 <TableHead className="text-right">操作</TableHead>
@@ -229,8 +259,8 @@ export default function AccountsPage() {
             <TableBody>
               {data.accounts.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                    还没有官网账号。点击「添加账号」录入邮箱+密码，再对账号发起设备授权。
+                  <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                    还没有账号。点击「添加账号」录入邮箱+密码，再对账号发起设备授权。
                   </TableCell>
                 </TableRow>
               )}
@@ -250,24 +280,30 @@ export default function AccountsPage() {
                       <Badge variant="outline" className="gap-1"><Unplug className="h-3 w-3" /> 未授权</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs">
-                    {a.device_name ? <code className="text-xs">{a.device_token_masked || a.device_name}</code> : <span className="text-muted-foreground">—</span>}
-                  </TableCell>
-                  <TableCell className="text-right text-xs">{fmtTokens(a.login_checkin_remaining)}</TableCell>
+                  <TableCell className="text-xs">{fmtTokens(a.login_checkin_remaining)}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(a.last_checkin_at)}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="ghost" title={a.authorized ? "重新授权" : "设备授权"}
-                        disabled={busy === `auth-${a.id}`} onClick={() => startAuth(a)}>
-                        <ExternalLink className="h-4 w-4" />
+                    <div className="flex justify-end gap-2 flex-wrap">
+                      {a.authorized ? (
+                        <Button size="sm" variant="outline" disabled={busy === `checkin-${a.id}`}
+                          onClick={() => checkinOne(a)}>
+                          <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
+                          签到
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" disabled={busy === `auth-${a.id}`}
+                          onClick={() => startAuth(a)}>
+                          <ExternalLink className="mr-1 h-3 w-3" />
+                          授权
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" disabled={busy === `toggle-${a.id}`}
+                        onClick={() => toggleAccount(a)}>
+                        {a.enabled ? "停用" : "启用"}
                       </Button>
-                      <Button size="sm" variant="ghost" title={a.enabled ? "停用" : "启用"}
-                        disabled={busy === `toggle-${a.id}`} onClick={() => toggleAccount(a)}>
-                        {a.enabled ? <Clock3 className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
-                      </Button>
-                      <Button size="sm" variant="ghost" title="删除"
-                        disabled={busy === `del-${a.id}`} onClick={() => removeAccount(a.id)}>
-                        <Trash2 className="h-4 w-4 text-destructive" />
+                      <Button size="sm" variant="ghost" disabled={busy === `del-${a.id}`}
+                        onClick={() => removeAccount(a.id)} className="text-destructive">
+                        删除
                       </Button>
                     </div>
                   </TableCell>
@@ -282,7 +318,7 @@ export default function AccountsPage() {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>添加官网账号</DialogTitle>
+            <DialogTitle>添加账号</DialogTitle>
             <DialogDescription>邮箱+密码仅用于设备授权时浏览器登录一次，之后靠设备凭证自动签到。</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
@@ -300,33 +336,51 @@ export default function AccountsPage() {
       </Dialog>
 
       {/* 设备授权 */}
-      <Dialog open={authOpen} onOpenChange={(o) => { setAuthOpen(o); if (!o && countdownTimer.current) clearInterval(countdownTimer.current) }}>
+      <Dialog open={authOpen} onOpenChange={(o) => {
+        setAuthOpen(o)
+        if (!o) {
+          if (countdownTimer.current) clearInterval(countdownTimer.current)
+          if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
+        }
+      }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>设备授权 {authAcc?.email_masked}</DialogTitle>
             <DialogDescription>
-              ① 在浏览器打开下面的授权链接，用该账号登录并批准设备；
-              ② 回来点「我已授权」领取设备凭证。链接 {expiresIn} 秒内有效。
+              ① 复制下面链接到浏览器打开，用该账号登录并批准设备；
+              ② 批准后回来点「我已授权」领取设备凭证。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
-            <a href={verifyUrl} target="_blank" rel="noreferrer"
-              className="break-all rounded-md border bg-muted/50 px-3 py-2 text-xs text-blue-600 hover:underline">
-              {verifyUrl}
-            </a>
+            <div className="flex items-center gap-2">
+              <a href={verifyUrl} target="_blank" rel="noreferrer"
+                className="flex-1 break-all rounded-md border bg-muted/50 px-3 py-2 text-xs text-blue-600 hover:underline">
+                {verifyUrl}
+              </a>
+              <Button size="sm" variant="outline" onClick={copyLink} title="复制链接">
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
             <div className="flex items-center gap-2 text-sm">
               <Badge variant={countdown > 0 ? "outline" : "destructive"} className="gap-1">
                 <Clock3 className="h-3 w-3" />
                 剩余 {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, "0")}
               </Badge>
-              {countdown === 0 && <span className="text-xs text-destructive">已过期，可点「重新授权」</span>}
+              {countdown === 0 && <span className="text-xs text-destructive">已过期，可关闭窗口重新授权</span>}
             </div>
+            {authState === "confirming" && confirmMsg && (
+              <p className="text-xs text-muted-foreground">{confirmMsg}</p>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAuthOpen(false)}>关闭</Button>
-            <Button onClick={confirmAuth} disabled={authState === "confirming"}>
-              {authState === "confirming" ? "确认中…" : "我已授权"}
+            <Button variant="outline" onClick={() => setAuthOpen(false)}>
+              {authState === "done" ? "关闭" : "取消"}
             </Button>
+            {authState !== "done" && (
+              <Button onClick={confirmAuth} disabled={authState === "confirming" || countdown === 0}>
+                {authState === "confirming" ? "确认中…" : "我已授权"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

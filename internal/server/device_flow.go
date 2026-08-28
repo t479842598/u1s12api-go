@@ -108,7 +108,8 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeviceConfirm 用户已在浏览器批准，回来点「我已授权」：轮询拿凭证入库。
+// handleDeviceConfirm 用户已在浏览器批准，回来点「我已授权」：轮询一次拿凭证入库。
+// 若尚未批准，返回 pending 状态让前端继续轮询。
 func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -120,24 +121,27 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "该账号没有进行中的设备授权，请先点「授权」")
 		return
 	}
+	logger.Infof("设备授权确认: account=%d", id)
 	dc := s.deviceClient()
 	if dc == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "设备客户端不可用")
 		return
 	}
-	// 轮询（阻塞直到批准或超时），客户端带超时上下文。
-	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(pd.expiresIn+5)*time.Second)
+	// 单次轮询尝试（不阻塞循环，由前端反复轮询）。
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	resp, err := dc.PollDeviceLogin(ctx, pd.pollSecret, pd.interval, pd.expiresIn)
+	resp, err := dc.PollDeviceLoginOnce(ctx, pd.pollSecret)
 	if err != nil {
-		writeAPIError(w, http.StatusGatewayTimeout, "轮询设备批准失败: "+err.Error())
+		writeAPIError(w, http.StatusBadGateway, "轮询设备批准失败: "+err.Error())
 		return
 	}
-	s.pending.del(id)
 	if resp == nil {
-		writeAPIError(w, http.StatusRequestTimeout, "设备尚未批准或链接已过期（expires_in 秒内需在浏览器完成批准）")
+		// 尚未批准，返回 pending
+		writeAPIData(w, http.StatusOK, map[string]any{"status": "pending"})
 		return
 	}
+	// 批准成功
+	s.pending.del(id)
 	privJSON, _ := json.Marshal(pd.privJWK)
 	pubJSON, _ := json.Marshal(pd.pubJWK)
 	if err := s.store.SaveAccountDeviceCredential(id, resp.DeviceToken, resp.APIKey, resp.DeviceID,
@@ -149,6 +153,7 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 	_ = s.checkinOne(id)
 	logger.Infof("设备授权成功: account=%d device_id=%s", id, resp.DeviceID)
 	writeAPIData(w, http.StatusOK, map[string]any{
+		"status":       "authorized",
 		"authorized":   true,
 		"device_id":    resp.DeviceID,
 		"api_key":      store.MaskKey(resp.APIKey),

@@ -111,6 +111,25 @@ func (s *Server) handleCheckAllCheckin(w http.ResponseWriter, _ *http.Request) {
 	writeAPIData(w, http.StatusOK, map[string]any{"ok": okCount, "total": len(results), "results": results})
 }
 
+// handleCheckinOne 单账号签到。
+func (s *Server) handleCheckinOne(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "无效 id")
+		return
+	}
+	if err := s.checkinOne(id); err != nil {
+		writeAPIError(w, http.StatusBadGateway, "签到失败: "+err.Error())
+		return
+	}
+	acc, _ := s.store.GetAccount(id)
+	writeAPIData(w, http.StatusOK, map[string]any{
+		"ok":                       true,
+		"login_checkin_remaining":   acc.LoginCheckinRemaining,
+		"last_checkin_at":           acc.LastCheckinAt,
+	})
+}
+
 func boolToInt(v bool) int {
 	if v {
 		return 1

@@ -205,6 +205,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/accounts/{id}/device/start", s.requireAdmin(s.handleDeviceStart))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/device/confirm", s.requireAdmin(s.handleDeviceConfirm))
 	mux.HandleFunc("POST /admin/api/accounts/check-all-checkin", s.requireAdmin(s.handleCheckAllCheckin))
+	mux.HandleFunc("POST /admin/api/accounts/{id}/checkin", s.requireAdmin(s.handleCheckinOne))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))

@@ -264,6 +264,27 @@ type DevicePollResp struct {
 	DeviceID    string `json:"device_id"`
 }
 
+// PollDeviceLoginOnce 单次轮询设备批准（不循环，由前端反复调用）。
+// 返回批准成功凭证或 (nil, nil) 表示尚未批准。
+func (c *DeviceClient) PollDeviceLoginOnce(ctx context.Context, pollSecret string) (*DevicePollResp, error) {
+	u := apiOrigin(c.baseURL) + "/auth/device/poll"
+	data, err := c.postJSON(ctx, u, map[string]any{"poll_secret": pollSecret})
+	if err != nil {
+		return nil, err
+	}
+	var resp DevicePollResp
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, nil
+	}
+	if resp.Status == "ok" && resp.APIKey != "" && resp.DeviceToken != "" {
+		return &resp, nil
+	}
+	if resp.Status == "expired" {
+		return nil, nil
+	}
+	return nil, nil
+}
+
 // PollDeviceLogin 轮询设备批准结果（interval 间隔，至 expiresIn 秒）。
 // 返回批准成功（status=ok + 凭证）或 (nil, nil)。
 func (c *DeviceClient) PollDeviceLogin(ctx context.Context, pollSecret string, interval, expiresIn int) (*DevicePollResp, error) {
@@ -306,9 +327,8 @@ func (c *DeviceClient) postJSON(ctx context.Context, u string, body any) ([]byte
 		return nil, err
 	}
 	req.Header.Set("content-type", "application/json")
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", "")
-	}
+	// 抑制 Go 默认 User-Agent（与官方 CLI 行为一致，auth 端点不发 UA）
+	req.Header.Set("User-Agent", "")
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
