@@ -261,7 +261,7 @@ type DevicePollResp struct {
 	Status      string `json:"status"`
 	APIKey      string `json:"api_key"`
 	DeviceToken string `json:"device_token"`
-	DeviceID    string `json:"device_id"`
+	DeviceID    json.Number `json:"device_id"`
 }
 
 // PollDeviceLoginOnce 单次轮询设备批准（不循环，由前端反复调用）。

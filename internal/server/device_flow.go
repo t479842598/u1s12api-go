@@ -118,10 +118,11 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	pd, ok := s.pending.get(id)
 	if !ok {
+		logger.Warnf("设备授权确认失败: 找不到 pendingDevice account=%d", id)
 		writeAPIError(w, http.StatusBadRequest, "该账号没有进行中的设备授权，请先点「授权」")
 		return
 	}
-	logger.Infof("设备授权确认: account=%d", id)
+	logger.Infof("设备授权确认: account=%d, 开始轮询 poll...", id)
 	dc := s.deviceClient()
 	if dc == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "设备客户端不可用")
@@ -132,30 +133,32 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	resp, err := dc.PollDeviceLoginOnce(ctx, pd.pollSecret)
 	if err != nil {
+		logger.Warnf("设备授权确认 poll 失败 account=%d: %v", id, err)
 		writeAPIError(w, http.StatusBadGateway, "轮询设备批准失败: "+err.Error())
 		return
 	}
 	if resp == nil {
-		// 尚未批准，返回 pending
+		logger.Infof("设备授权确认: account=%d 尚未批准，返回 pending", id)
 		writeAPIData(w, http.StatusOK, map[string]any{"status": "pending"})
 		return
 	}
 	// 批准成功
+	logger.Infof("设备授权确认: account=%d 批准成功，device_token=%.12s..., device_id=%s", id, resp.DeviceToken, resp.DeviceID.String())
 	s.pending.del(id)
 	privJSON, _ := json.Marshal(pd.privJWK)
 	pubJSON, _ := json.Marshal(pd.pubJWK)
-	if err := s.store.SaveAccountDeviceCredential(id, resp.DeviceToken, resp.APIKey, resp.DeviceID,
+	if err := s.store.SaveAccountDeviceCredential(id, resp.DeviceToken, resp.APIKey, resp.DeviceID.String(),
 		string(privJSON), string(pubJSON), pd.deviceName); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "保存设备凭证失败: "+err.Error())
 		return
 	}
 	// 授权后立刻做一次签到（调 /v1/me 触发加量包发放）。
 	_ = s.checkinOne(id)
-	logger.Infof("设备授权成功: account=%d device_id=%s", id, resp.DeviceID)
+	logger.Infof("设备授权成功: account=%d device_id=%s", id, resp.DeviceID.String())
 	writeAPIData(w, http.StatusOK, map[string]any{
 		"status":       "authorized",
 		"authorized":   true,
-		"device_id":    resp.DeviceID,
+		"device_id":    resp.DeviceID.String(),
 		"api_key":      store.MaskKey(resp.APIKey),
 		"device_token": store.MaskDeviceToken(resp.DeviceToken),
 	})

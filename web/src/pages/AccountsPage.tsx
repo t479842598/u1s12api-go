@@ -60,8 +60,8 @@ export default function AccountsPage() {
   const [countdown, setCountdown] = useState(0)
   const [authState, setAuthState] = useState<"idle" | "confirming" | "done">("idle")
   const [confirmMsg, setConfirmMsg] = useState("")
+  const confirmAbortRef = useRef(false)
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const confirmPollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -82,7 +82,6 @@ export default function AccountsPage() {
   useEffect(() => {
     return () => {
       if (countdownTimer.current) clearInterval(countdownTimer.current)
-      if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
     }
   }, [])
 
@@ -160,31 +159,38 @@ export default function AccountsPage() {
 
   const confirmAuth = async () => {
     if (!authAcc) return
+    confirmAbortRef.current = false
     setAuthState("confirming")
     setConfirmMsg("正在确认授权，请稍候…")
     try {
       const maxTries = 180
       for (let i = 0; i < maxTries; i++) {
+        if (confirmAbortRef.current) return
         const r = await api.deviceConfirm(authAcc.id)
         if (r.status === "authorized") {
+          if (confirmAbortRef.current) return
           toast.success("设备授权成功")
           setAuthState("done")
           setConfirmMsg("授权成功，设备凭证已保存")
           if (countdownTimer.current) clearInterval(countdownTimer.current)
-          if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
           setTimeout(() => { setAuthOpen(false); load() }, 1500)
           return
         }
         setConfirmMsg(`等待浏览器批准第 ${i + 1} 次…（请确认已在浏览器完成批准）`)
         await new Promise((resolve) => setTimeout(resolve, 5000))
+        if (confirmAbortRef.current) return
       }
-      toast.error("授权超时，请重新发起授权")
-      setAuthState("idle")
-      setConfirmMsg("")
+      if (!confirmAbortRef.current) {
+        toast.error("授权超时，请重新发起授权")
+        setAuthState("idle")
+        setConfirmMsg("")
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "授权确认失败")
-      setAuthState("idle")
-      setConfirmMsg("")
+      if (!confirmAbortRef.current) {
+        toast.error(err instanceof Error ? err.message : "授权确认失败")
+        setAuthState("idle")
+        setConfirmMsg("")
+      }
     }
   }
 
@@ -337,11 +343,13 @@ export default function AccountsPage() {
 
       {/* 设备授权 */}
       <Dialog open={authOpen} onOpenChange={(o) => {
-        setAuthOpen(o)
         if (!o) {
+          confirmAbortRef.current = true  // 关闭弹窗时立即停止轮询
           if (countdownTimer.current) clearInterval(countdownTimer.current)
-          if (confirmPollTimer.current) clearInterval(confirmPollTimer.current)
+          setAuthState("idle")
+          setConfirmMsg("")
         }
+        setAuthOpen(o)
       }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

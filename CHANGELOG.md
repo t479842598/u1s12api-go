@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.2 (2026-08-28)
+
+### 修复
+
+- **设备授权 device_id 类型不匹配**：上游 `/auth/device/poll` 返回的 `device_id` 为数字（`654`），但 `DevicePollResp` 结构体定义为 `string`，导致 `json.Unmarshal` 静默失败，授权永远轮询不到。改为 `json.Number` 兼容
+- **前端轮询取消机制**：关闭授权弹窗时停止后台轮询，避免多个授权请求冲突
+
 ## v0.5.1 (2026-08-28)
 
 ### 修复
