@@ -262,6 +262,7 @@ export interface AccountItem {
   email_masked: string
   note: string
   enabled: boolean
+  has_password: boolean
   authorized: boolean
   device_token_masked: string
   api_key_masked: string
@@ -289,6 +290,25 @@ export interface DeviceStartResult {
 export interface DeviceConfirmResult {
   status: string
   authorized: boolean
+  device_id: string
+  api_key: string
+  device_token: string
+}
+
+// U1S1 一键登录：无需预填邮箱密码，授权后自动建号 + api_key 入池
+
+export interface OneClickStartResult {
+  session_id: string
+  verify_url: string
+  expires_in: number
+  interval: number
+}
+
+export interface OneClickConfirmResult {
+  status: string
+  authorized: boolean
+  account_id: number
+  email: string
   device_id: string
   api_key: string
   device_token: string

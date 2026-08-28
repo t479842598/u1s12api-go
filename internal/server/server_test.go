@@ -50,7 +50,7 @@ func setupTest(t *testing.T, upstreamHandler http.HandlerFunc) *fixture {
 		Host: "127.0.0.1", Port: 0,
 		AdminPassword:   "test-admin-pw",
 		UpstreamBaseURL: upTS.URL,
-		U1S1Version:     "1.2.1",
+		U1S1Version:     "1.2.3",
 	}
 
 	pool, err := upstream.NewPool(st)
@@ -142,7 +142,7 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 	checks := map[string]string{
 		"Authorization":               "Bearer u1s1-aaaa1111bbbb2222cccc",
 		"User-Agent":                  "pi (linux 6.8.0-45-generic; x64)",
-		"X-U1s1-Version":              "1.2.1",
+		"X-U1s1-Version":              "1.2.3",
 		"X-Stainless-Lang":            "js",
 		"X-Stainless-Package-Version": fingerprint.SDKPackageVersion,
 		"X-Stainless-Os":              "Linux",

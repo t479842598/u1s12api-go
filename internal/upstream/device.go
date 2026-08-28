@@ -46,15 +46,26 @@ type DeviceClient struct {
 	proxy   string
 	// clientVersion 当前 CLI 版本（x-u1s1-version 头）。
 	clientVersion func() string
+	// profile 当前指纹档案（x-u1s1-platform / UA / X-Stainless-* 与其自洽）。
+	profile func() fingerprint.Profile
 }
 
 // NewDeviceClient 构造。baseURL 形如 https://api.u1s1.io/v1。
-func NewDeviceClient(baseURL, proxy string, clientVersion func() string) *DeviceClient {
+func NewDeviceClient(baseURL, proxy string, clientVersion func() string, profile func() fingerprint.Profile) *DeviceClient {
 	return &DeviceClient{
 		baseURL:         strings.TrimRight(baseURL, "/"),
 		proxy:           proxy,
 		clientVersion:   clientVersion,
+		profile:         profile,
 	}
+}
+
+// currentProfile 返回设备客户端应使用的指纹档案（缺省回退 macos-arm64）。
+func (c *DeviceClient) currentProfile() fingerprint.Profile {
+	if c.profile != nil {
+		return c.profile()
+	}
+	return fingerprint.Profiles[0]
 }
 
 // apiOrigin /v1 → 域名根（auth 路由挂在根路径）。
@@ -384,6 +395,8 @@ func (c *DeviceClient) DeviceMe(ctx context.Context, account *DeviceCredential) 
 	if err != nil {
 		return nil, err
 	}
+	// 官方 fetchMe 带 x-u1s1-version（authorizedFetch 的 init.headers 里显式设置）。
+	headers["x-u1s1-version"] = c.clientVersion()
 	resp, err := c.doDevice(ctx, http.MethodGet, "/me", headers, nil)
 	if err != nil {
 		return nil, err
@@ -424,15 +437,18 @@ func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential
 	for k, v := range dp {
 		headers[k] = v
 	}
-	// 追加客户端指纹头（与官方 CLI 一致）。
-	headers["user-agent"] = fingerprint.UserAgent(fingerprint.Profiles[0]) // 默认 macos-arm64 档案
+	// 追加客户端指纹头（与官方 CLI 1.2.3 签名代理一致：设备凭证模式附加 x-u1s1-client/x-u1s1-platform）。
+	p := c.currentProfile()
+	headers["user-agent"] = fingerprint.UserAgent(p)
 	headers["x-u1s1-version"] = c.clientVersion()
+	headers["x-u1s1-client"] = fingerprint.ClientSurface
+	headers["x-u1s1-platform"] = fingerprint.ClientPlatform(p)
 	headers["X-Stainless-Lang"] = "js"
 	headers["X-Stainless-Package-Version"] = fingerprint.SDKPackageVersion
-	headers["X-Stainless-OS"] = "MacOS"
-	headers["X-Stainless-Arch"] = "arm64"
+	headers["X-Stainless-OS"] = p.StainlessOS
+	headers["X-Stainless-Arch"] = p.StainlessArch
 	headers["X-Stainless-Runtime"] = "node"
-	headers["X-Stainless-Runtime-Version"] = "v22.21.1"
+	headers["X-Stainless-Runtime-Version"] = p.RuntimeVersion
 	headers["X-Stainless-Retry-Count"] = "0"
 	resp, err := c.doDevice(ctx, http.MethodPost, "/chat/completions", headers, body)
 	if err != nil {

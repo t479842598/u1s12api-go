@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
 	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
@@ -152,6 +153,20 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "保存设备凭证失败: "+err.Error())
 		return
 	}
+	// 授权完成后，把设备登录返回的 u1s1- api_key 自动导入 Key 池（只读兼容兜底通道）。
+	// AddUpstreamKey 用 INSERT OR IGNORE 去重，绝不覆盖/清掉服务器上已有 key。
+	if resp.APIKey != "" {
+		note := "授权账号自动导入"
+		if a, e := s.store.GetAccount(id); e == nil && a.Email != "" {
+			note = "授权账号 " + a.Email + " 自动导入"
+		}
+		if added, e := s.store.AddUpstreamKey(resp.APIKey, note); e != nil {
+			logger.Warnf("导入授权账号 api_key 到 Key 池失败 account=%d: %v", id, e)
+		} else if added {
+			_ = s.pool.Reload()
+			logger.Infof("授权账号 api_key 已导入 Key 池 account=%d", id)
+		}
+	}
 	// 授权后立刻做一次签到（调 /v1/me 触发加量包发放）。
 	_ = s.checkinOne(id)
 	logger.Infof("设备授权成功: account=%d device_id=%s", id, resp.DeviceID.String())
@@ -168,5 +183,6 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deviceClient() *upstream.DeviceClient {
 	cfg := s.getSettings()
 	return upstream.NewDeviceClient(cfg.UpstreamBaseURL, cfg.EgressProxyURL,
-		func() string { return s.getSettings().U1S1Version })
+		func() string { return s.getSettings().U1S1Version },
+		func() fingerprint.Profile { return s.fp.Current() })
 }

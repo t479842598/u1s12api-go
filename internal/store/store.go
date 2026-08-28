@@ -754,6 +754,7 @@ type Account struct {
 	Password             string `json:"password,omitempty"`
 	Note                 string `json:"note"`
 	Enabled              bool   `json:"enabled"`
+	HasPassword          bool   `json:"has_password"`
 	DeviceToken          string `json:"device_token"`
 	DeviceTokenMasked    string `json:"device_token_masked"`
 	APIKey               string `json:"api_key,omitempty"`
@@ -787,6 +788,8 @@ func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	}
 	a.Enabled = enabled == 1
 	a.Authorized = authorized == 1
+	a.HasPassword = a.Password != ""
+	a.Password = "" // 列表不回明文密码
 	a.EmailMasked = MaskEmail(a.Email)
 	a.APIKeyMasked = MaskKey(a.APIKey)
 	a.DeviceTokenMasked = MaskDeviceToken(a.DeviceToken)
@@ -848,6 +851,19 @@ func (s *Store) ListAccounts() ([]*Account, error) {
 	return out, rows.Err()
 }
 
+// GetAccountByEmail 按邮箱取账号（含完整凭证）。不存在时返回错误。
+func (s *Store) GetAccountByEmail(email string) (*Account, error) {
+	row := s.db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE email=?`, strings.TrimSpace(email))
+	a, err := scanAccount(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("账号 %q 不存在", email)
+		}
+		return nil, err
+	}
+	return a, nil
+}
+
 // GetAccount 按 id 取账号（含完整凭证）。
 func (s *Store) GetAccount(id int64) (*Account, error) {
 	row := s.db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE id=?`, id)
@@ -859,6 +875,13 @@ func (s *Store) GetAccount(id int64) (*Account, error) {
 		return nil, err
 	}
 	return a, nil
+}
+
+// GetAccountCredential 账号登录凭证（明文邮箱+密码）。列表/扫描路径统一不回明文密码，
+// 这里单独直查，供管理端「复制账号/复制密码」后到官网手动登录打卡用。
+func (s *Store) GetAccountCredential(id int64) (email, password string, err error) {
+	err = s.db.QueryRow(`SELECT email, password FROM accounts WHERE id=?`, id).Scan(&email, &password)
+	return
 }
 
 // SaveAccountDeviceCredential 写入设备凭证并标记已授权。
@@ -895,7 +918,7 @@ func (s *Store) CountAuthorizedEnabled() (int, error) {
 	return n, err
 }
 
-// UpdateAccount 更新启用/备注。字段 map：enabled bool / note string。
+// UpdateAccount 更新启用/备注/密码。字段 map：enabled bool / note string / password string。
 func (s *Store) UpdateAccount(id int64, fields map[string]any) error {
 	sets := []string{}
 	args := []any{}
@@ -905,6 +928,10 @@ func (s *Store) UpdateAccount(id int64, fields map[string]any) error {
 	}
 	if v, ok := fields["note"]; ok {
 		sets = append(sets, "note=?")
+		args = append(args, v)
+	}
+	if v, ok := fields["password"]; ok {
+		sets = append(sets, "password=?")
 		args = append(args, v)
 	}
 	sets = append(sets, "updated_at=?")

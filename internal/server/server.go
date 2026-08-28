@@ -54,6 +54,12 @@ type Server struct {
 
 	// 官网账号设备授权（内存态）与每日签到。
 	pending *pendingDeviceMap
+	// U1S1 原生一键登录（内存态，无需预填账号密码，授权后自动建号）。
+	oneClick *oneClickMap
+	// 设备账号当日额度耗尽标记：某授权账号设备触发 quota_exceeded 后冷却到次日北京时间 0 点，
+	// 避免并发请求反复打同一台已耗尽的账号（先用最少额度，耗尽切到最多额度）。
+	deviceQuotaExhaustedMu sync.Mutex
+	deviceQuotaExhausted   map[int64]time.Time
 }
 
 type atomicValue struct {
@@ -81,6 +87,8 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 		projectRoot: projectRoot,
 		throttle:    newLoginThrottle(5, 15*time.Minute),
 		pending:     &pendingDeviceMap{},
+		oneClick:    &oneClickMap{},
+		deviceQuotaExhausted: map[int64]time.Time{},
 	}
 	s.cfg.Store(cfg)
 
@@ -204,8 +212,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /admin/api/accounts/{id}", s.requireAdmin(s.handleDeleteAccount))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/device/start", s.requireAdmin(s.handleDeviceStart))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/device/confirm", s.requireAdmin(s.handleDeviceConfirm))
+	mux.HandleFunc("POST /admin/api/accounts/one-click/start", s.requireAdmin(s.handleOneClickStart))
+	mux.HandleFunc("POST /admin/api/accounts/one-click/confirm", s.requireAdmin(s.handleOneClickConfirm))
 	mux.HandleFunc("POST /admin/api/accounts/check-all-checkin", s.requireAdmin(s.handleCheckAllCheckin))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/checkin", s.requireAdmin(s.handleCheckinOne))
+	mux.HandleFunc("GET /admin/api/accounts/{id}/credential", s.requireAdmin(s.handleAccountCredential))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))

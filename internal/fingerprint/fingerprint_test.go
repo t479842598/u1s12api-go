@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// TestChatHeadersShape 校验 chat 请求指纹头与官方 CLI 一致（逆向自 u1s1-cli 1.2.1）。
+// TestChatHeadersShape 校验 chat 请求指纹头与官方 CLI 一致（逆向自 u1s1-cli 1.2.3）。
 func TestChatHeadersShape(t *testing.T) {
 	m, err := NewManager(t.TempDir()+"/fp.json", "macos-arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := m.ChatHeaders("u1s1-testkey", "1.2.1")
+	h := m.ChatHeaders("u1s1-testkey", "1.2.3")
 
 	required := []string{
 		"authorization",
@@ -34,7 +34,7 @@ func TestChatHeadersShape(t *testing.T) {
 	if h["authorization"] != "Bearer u1s1-testkey" {
 		t.Errorf("authorization = %q, 期望 Bearer 形式", h["authorization"])
 	}
-	if h["x-u1s1-version"] != "1.2.1" {
+	if h["x-u1s1-version"] != "1.2.3" {
 		t.Errorf("x-u1s1-version = %q", h["x-u1s1-version"])
 	}
 	// UA 格式: pi ({platform} {release}; {arch})
@@ -95,7 +95,7 @@ func TestManagerPersistence(t *testing.T) {
 }
 
 func TestAuxHeaders(t *testing.T) {
-	h := AuxHeaders("u1s1-k", "1.2.1")
+	h := AuxHeaders("u1s1-k", "1.2.3")
 	if len(h) != 2 {
 		t.Errorf("辅助端点应只有 authorization + x-u1s1-version，得到 %d 个头", len(h))
 	}

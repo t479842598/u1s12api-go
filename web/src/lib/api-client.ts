@@ -18,6 +18,8 @@ import type {
   DeviceStartResult,
   DeviceConfirmResult,
   CheckinAllResult,
+  OneClickStartResult,
+  OneClickConfirmResult,
 } from "@/types"
 
 const API_BASE = "/admin/api"
@@ -190,7 +192,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password, note }),
     }),
-  updateAccount: (id: number, fields: { enabled?: boolean; note?: string }) =>
+  updateAccount: (id: number, fields: { enabled?: boolean; note?: string; password?: string }) =>
     request<unknown>(`/accounts/${id}`, {
       method: "PUT",
       body: JSON.stringify(fields),
@@ -201,6 +203,13 @@ export const api = {
     request<DeviceStartResult>(`/accounts/${id}/device/start`, { method: "POST" }),
   deviceConfirm: (id: number) =>
     request<DeviceConfirmResult>(`/accounts/${id}/device/confirm`, { method: "POST" }),
+  oneClickStart: () =>
+    request<OneClickStartResult>("/accounts/one-click/start", { method: "POST" }),
+  oneClickConfirm: (sessionId: string) =>
+    request<OneClickConfirmResult>(
+      `/accounts/one-click/confirm?session_id=${encodeURIComponent(sessionId)}`,
+      { method: "POST" },
+    ),
   checkAllCheckin: () =>
     request<CheckinAllResult>("/accounts/check-all-checkin", { method: "POST" }),
   checkinOne: (id: number) =>
@@ -208,4 +217,6 @@ export const api = {
       `/accounts/${id}/checkin`,
       { method: "POST" },
     ),
+  accountCredential: (id: number) =>
+    request<{ email: string; password: string }>(`/accounts/${id}/credential`),
 }

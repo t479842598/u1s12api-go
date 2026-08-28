@@ -26,7 +26,7 @@ const NAV_ITEMS = [
   { to: "/admin/dashboard", label: "概览", icon: LayoutDashboard },
   { to: "/admin/u1s1-keys", label: "U1S1 Key", icon: KeyRound },
   { to: "/admin/keys", label: "API Key", icon: ShieldCheck },
-  { to: "/admin/accounts", label: "签到管理", icon: CalendarCheck },
+  { to: "/admin/accounts", label: "授权账号", icon: CalendarCheck },
   { to: "/admin/requests", label: "请求记录", icon: FileText },
   { to: "/admin/logs", label: "运行日志", icon: ScrollText },
   { to: "/admin/model-test", label: "模型测试", icon: Terminal },

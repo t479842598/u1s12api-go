@@ -29,7 +29,10 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { PageLoading } from "@/components/shared/PageLoading"
-import { CheckCircle2, Clock3, ExternalLink, Plus, RefreshCw, Unplug, Copy } from "lucide-react"
+import { CheckCircle2, Clock3, ExternalLink, Plus, RefreshCw, Unplug, Copy, KeyRound } from "lucide-react"
+
+// 打卡需要真浏览器（CapCAT），点按钮直接打开 U1S1 官网打卡页手动登录打卡
+const U1S1_CHECKIN_URL = "https://u1s1.io/dashboard#sec-usage"
 
 function fmtTime(unix: number): string {
   if (!unix) return "—"
@@ -62,6 +65,20 @@ export default function AccountsPage() {
   const [confirmMsg, setConfirmMsg] = useState("")
   const confirmAbortRef = useRef(false)
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 一键登录（无需预填账号密码）
+  const [ocOpen, setOcOpen] = useState(false)
+  const [ocVerifyUrl, setOcVerifyUrl] = useState("")
+  const [ocCountdown, setOcCountdown] = useState(0)
+  const [ocSessionId, setOcSessionId] = useState("")
+  const [ocState, setOcState] = useState<"idle" | "confirming" | "done">("idle")
+  const [ocMsg, setOcMsg] = useState("")
+  const ocAbortRef = useRef(false)
+
+  // 设置密码（打卡需要保存账号密码才能自动登录）
+  const [pwdOpen, setPwdOpen] = useState(false)
+  const [pwdAcc, setPwdAcc] = useState<AccountItem | null>(null)
+  const [pwdValue, setPwdValue] = useState("")
 
   const load = useCallback(async () => {
     try {
@@ -149,8 +166,8 @@ export default function AccountsPage() {
     }
   }
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(verifyUrl).then(() => {
+  const copyLink = (url?: string) => {
+    navigator.clipboard.writeText(url ?? verifyUrl).then(() => {
       toast.success("授权链接已复制")
     }).catch(() => {
       toast.error("复制失败，请手动复制")
@@ -194,16 +211,120 @@ export default function AccountsPage() {
     }
   }
 
+  const startOneClick = async () => {
+    setBusy("oc-start")
+    try {
+      const r = await api.oneClickStart()
+      setOcVerifyUrl(r.verify_url)
+      setOcSessionId(r.session_id)
+      setOcCountdown(r.expires_in)
+      setOcState("idle")
+      setOcMsg("")
+      setOcOpen(true)
+      if (countdownTimer.current) clearInterval(countdownTimer.current)
+      countdownTimer.current = setInterval(() => {
+        setOcCountdown((c) => (c <= 1 ? 0 : c - 1))
+      }, 1000)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "发起一键登录失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const confirmOneClick = async () => {
+    ocAbortRef.current = false
+    setOcState("confirming")
+    setOcMsg("正在确认授权，请稍候…")
+    try {
+      const maxTries = 180
+      for (let i = 0; i < maxTries; i++) {
+        if (ocAbortRef.current) return
+        const r = await api.oneClickConfirm(ocSessionId)
+        if (r.status === "authorized") {
+          if (ocAbortRef.current) return
+          toast.success("一键登录成功，账号已添加并自动导入 Key 池")
+          setOcState("done")
+          setOcMsg("登录成功，账号已添加")
+          if (countdownTimer.current) clearInterval(countdownTimer.current)
+          setTimeout(() => { setOcOpen(false); load() }, 1500)
+          return
+        }
+        setOcMsg(`等待 U1S1 登录批准第 ${i + 1} 次…（请在浏览器完成登录并批准）`)
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        if (ocAbortRef.current) return
+      }
+      if (!ocAbortRef.current) {
+        toast.error("授权超时，请重新发起一键登录")
+        setOcState("idle")
+        setOcMsg("")
+      }
+    } catch (err) {
+      if (!ocAbortRef.current) {
+        toast.error(err instanceof Error ? err.message : "一键登录确认失败")
+        setOcState("idle")
+        setOcMsg("")
+      }
+    }
+  }
+
+  const openPwd = (a: AccountItem) => {
+    setPwdAcc(a)
+    setPwdValue("")
+    setPwdOpen(true)
+  }
+
+  const savePwd = async () => {
+    if (!pwdAcc || !pwdValue.trim()) return
+    setBusy(`pwd-${pwdAcc.id}`)
+    try {
+      await api.updateAccount(pwdAcc.id, { password: pwdValue })
+      toast.success(`${pwdAcc.email_masked} 密码已保存`)
+      setPwdOpen(false)
+      setPwdAcc(null)
+      setPwdValue("")
+      load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存密码失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const checkinOne = async (a: AccountItem) => {
+    if (!a.has_password) {
+      toast.error(`账号 ${a.email_masked} 未保存密码，请先点击「设置密码」保存后再打卡`)
+      openPwd(a)
+      return
+    }
     setBusy(`checkin-${a.id}`)
     try {
       const r = await api.checkinOne(a.id)
       if (r.ok) {
-        toast.success(`${a.email_masked} 签到成功`)
+        toast.success(`${a.email_masked} 额度已刷新`)
       }
       load()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "签到失败")
+      toast.error(err instanceof Error ? err.message : "额度查询失败")
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // 复制账号/密码到剪贴板（打卡页手动登录用）。
+  const copyCredential = async (a: AccountItem, what: "email" | "password") => {
+    if (what === "password" && !a.has_password) {
+      toast.error(`账号 ${a.email_masked} 未保存密码，请先设置密码`)
+      openPwd(a)
+      return
+    }
+    setBusy(`cred-${a.id}`)
+    try {
+      const r = await api.accountCredential(a.id)
+      await navigator.clipboard.writeText(what === "email" ? r.email : r.password)
+      toast.success(what === "email" ? "账号邮箱已复制，去打卡页粘贴登录" : "密码已复制")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "复制失败")
     } finally {
       setBusy(null)
     }
@@ -229,15 +350,19 @@ export default function AccountsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">签到管理</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">授权账号</h1>
           <p className="text-sm text-muted-foreground">
-            共 {data.accounts.length} 个账号 · 已授权 {authCount} 个；授权后每天自动签到领取 200 万 Token 加量包
+            共 {data.accounts.length} 个账号 · 已授权 {authCount} 个；点「复制账号/复制密码」取登录凭证 →「去打卡」打开官网打卡页登录，点“打卡领取 200 万 Token”（CapCAT 需真浏览器手动）
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={checkAll} disabled={busy === "check-all" || authCount === 0}>
             <RefreshCw className={`mr-1 h-4 w-4 ${busy === "check-all" ? "animate-spin" : ""}`} />
             全部签到
+          </Button>
+          <Button size="sm" variant="outline" onClick={startOneClick} disabled={busy === "oc-start"}>
+            <ExternalLink className="mr-1 h-4 w-4" />
+            一键登录
           </Button>
           <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus className="mr-1 h-4 w-4" />
@@ -249,7 +374,7 @@ export default function AccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">账号列表</CardTitle>
-          <CardDescription>录入账号后发起设备授权，授权后每天自动签到领取加量包</CardDescription>
+          <CardDescription>录入账号后发起设备授权，领取设备凭证（u1s1d- + api_key），用于模拟官方客户端；每日打卡：复制账号密码 →「去打卡」在官网手动登录领取</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -277,6 +402,11 @@ export default function AccountsPage() {
                       <span className="text-sm">{a.email_masked}</span>
                       {a.note && <span className="text-xs text-muted-foreground">{a.note}</span>}
                       {!a.enabled && <span className="text-xs text-muted-foreground">（已停用）</span>}
+                      {a.has_password ? (
+                        <span className="text-xs text-emerald-600">✓ 已存密码</span>
+                      ) : (
+                        <span className="text-xs text-amber-600">未存密码 · 打卡前需设置</span>
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
@@ -291,11 +421,18 @@ export default function AccountsPage() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2 flex-wrap">
                       {a.authorized ? (
-                        <Button size="sm" variant="outline" disabled={busy === `checkin-${a.id}`}
-                          onClick={() => checkinOne(a)}>
-                          <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
-                          签到
-                        </Button>
+                        <>
+                          <Button size="sm" variant="outline" title="打开官网打卡页手动登录打卡"
+                            onClick={() => window.open(U1S1_CHECKIN_URL, "_blank")}>
+                            <ExternalLink className="mr-1 h-3 w-3" />
+                            去打卡
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={busy === `checkin-${a.id}`}
+                            onClick={() => checkinOne(a)}>
+                            <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
+                            查额度
+                          </Button>
+                        </>
                       ) : (
                         <Button size="sm" variant="outline" disabled={busy === `auth-${a.id}`}
                           onClick={() => startAuth(a)}>
@@ -303,6 +440,21 @@ export default function AccountsPage() {
                           授权
                         </Button>
                       )}
+                      <Button size="sm" variant="ghost" title="复制完整邮箱，登录官网打卡页用"
+                        disabled={busy === `cred-${a.id}`} onClick={() => copyCredential(a, "email")}>
+                        <Copy className="mr-1 h-3 w-3" />
+                        复制账号
+                      </Button>
+                      <Button size="sm" variant="ghost" title="复制已保存的官网密码"
+                        disabled={busy === `cred-${a.id}`} onClick={() => copyCredential(a, "password")}>
+                        <Copy className="mr-1 h-3 w-3" />
+                        复制密码
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={busy === `pwd-${a.id}`}
+                        onClick={() => openPwd(a)}>
+                        <KeyRound className="mr-1 h-3 w-3" />
+                        设置密码
+                      </Button>
                       <Button size="sm" variant="ghost" disabled={busy === `toggle-${a.id}`}
                         onClick={() => toggleAccount(a)}>
                         {a.enabled ? "停用" : "启用"}
@@ -365,7 +517,7 @@ export default function AccountsPage() {
                 className="flex-1 break-all rounded-md border bg-muted/50 px-3 py-2 text-xs text-blue-600 hover:underline">
                 {verifyUrl}
               </a>
-              <Button size="sm" variant="outline" onClick={copyLink} title="复制链接">
+              <Button size="sm" variant="outline" onClick={() => copyLink()} title="复制链接">
                 <Copy className="h-4 w-4" />
               </Button>
             </div>
@@ -387,6 +539,80 @@ export default function AccountsPage() {
             {authState !== "done" && (
               <Button onClick={confirmAuth} disabled={authState === "confirming" || countdown === 0}>
                 {authState === "confirming" ? "确认中…" : "我已授权"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 设置账号密码（打卡需要） */}
+      <Dialog open={pwdOpen} onOpenChange={setPwdOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>设置账号密码 {pwdAcc?.email_masked}</DialogTitle>
+            <DialogDescription>
+              保存该账号的 U1S1 官网密码，用于自动登录打卡领取每日 200 万 Token 加量包。密码仅存本机数据库（与其它账号一致），不会外传。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <Input type="password" placeholder="U1S1 官网密码" value={pwdValue}
+              onChange={(e) => setPwdValue(e.target.value)}
+              autoFocus />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPwdOpen(false)}>取消</Button>
+            <Button onClick={savePwd} disabled={!pwdValue.trim() || busy === `pwd-${pwdAcc?.id}`}>
+              {busy === `pwd-${pwdAcc?.id}` ? "保存中…" : "保存密码"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 一键登录（无需预填账号密码） */}
+      <Dialog open={ocOpen} onOpenChange={(o) => {
+        if (!o) {
+          ocAbortRef.current = true
+          if (countdownTimer.current) clearInterval(countdownTimer.current)
+          setOcState("idle")
+          setOcMsg("")
+        }
+        setOcOpen(o)
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>一键登录 U1S1</DialogTitle>
+            <DialogDescription>
+              无需在后台填写账号密码：① 打开链接用 U1S1 账号登录并批准设备；② 回来后点「我已登录」，系统自动建账号并领取设备凭证与 API Key，加入 Key 池。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2">
+              <a href={ocVerifyUrl} target="_blank" rel="noreferrer"
+                className="flex-1 break-all rounded-md border bg-muted/50 px-3 py-2 text-xs text-blue-600 hover:underline">
+                {ocVerifyUrl}
+              </a>
+              <Button size="sm" variant="outline" onClick={() => copyLink(ocVerifyUrl)} title="复制链接">
+                <Copy className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Badge variant={ocCountdown > 0 ? "outline" : "destructive"} className="gap-1">
+                <Clock3 className="h-3 w-3" />
+                剩余 {Math.floor(ocCountdown / 60)}:{String(ocCountdown % 60).padStart(2, "0")}
+              </Badge>
+              {ocCountdown === 0 && <span className="text-xs text-destructive">已过期，可关闭窗口重新登录</span>}
+            </div>
+            {ocState === "confirming" && ocMsg && (
+              <p className="text-xs text-muted-foreground">{ocMsg}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOcOpen(false)}>
+              {ocState === "done" ? "关闭" : "取消"}
+            </Button>
+            {ocState !== "done" && (
+              <Button onClick={confirmOneClick} disabled={ocState === "confirming" || ocCountdown === 0}>
+                {ocState === "confirming" ? "确认中…" : "我已登录"}
               </Button>
             )}
           </DialogFooter>

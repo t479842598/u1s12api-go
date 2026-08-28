@@ -31,7 +31,7 @@ type Settings struct {
 
 const (
 	DefaultUpstreamBaseURL = "https://api.u1s1.io/v1"
-	DefaultU1S1Version     = "1.2.1"
+	DefaultU1S1Version     = "1.2.3"
 	defaultProfile         = "auto"
 )
 
@@ -208,7 +208,7 @@ func readEnvLines(path string) []string {
 # UPSTREAM_BASE_URL=https://api.u1s1.io/v1
 # EGRESS_PROXY=socks5://127.0.0.1:7897
 # FINGERPRINT_PROFILE=auto
-# U1S1_VERSION=1.2.1
+# U1S1_VERSION=1.2.3
 # QUOTA_AUTO_REFRESH=true   ← 北京时间 0 点额度重置后自动刷新全部上游 Key 配额
 `
 		_ = os.WriteFile(path, []byte(defaults), 0o600)

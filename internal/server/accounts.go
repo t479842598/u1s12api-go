@@ -66,8 +66,9 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Enabled *bool  `json:"enabled"`
-		Note    *string `json:"note"`
+		Enabled  *bool   `json:"enabled"`
+		Note     *string `json:"note"`
+		Password *string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "请求体不是合法 JSON")
@@ -79,6 +80,9 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Note != nil {
 		fields["note"] = *body.Note
+	}
+	if body.Password != nil {
+		fields["password"] = *body.Password
 	}
 	if err := s.store.UpdateAccount(id, fields); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -99,6 +103,22 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPIData(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAccountCredential 返回账号登录凭证（明文邮箱+密码），供前端「复制账号/复制密码」
+// 到剪贴板后在浏览器手动登录打卡。未保存密码时 password 为空串。
+func (s *Server) handleAccountCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "无效 id")
+		return
+	}
+	email, password, err := s.store.GetAccountCredential(id)
+	if err != nil {
+		writeAPIError(w, http.StatusNotFound, "账号不存在")
+		return
+	}
+	writeAPIData(w, http.StatusOK, map[string]any{"email": email, "password": password})
 }
 
 // handleCheckAllCheckin 手动触发：对全部已授权账号做一次签到（调 /v1/me 触发加量包发放）。

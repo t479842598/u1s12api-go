@@ -1,12 +1,29 @@
 // Package fingerprint 构造与官方 u1s1 CLI 一致的请求头指纹。
 //
 // u1s1 CLI（pi-coding-agent 换皮）向 https://api.u1s1.io/v1 发起 chat/completions
-// 时由 OpenAI SDK v6.40.0 附带以下指纹头（逆向自 u1s1-cli 1.2.1 dist）：
+// 时由 OpenAI SDK v6.40.0 附带以下指纹头（逆向自 u1s1-cli 1.2.3 dist）：
 //
-//	Authorization: Bearer u1s1-xxx
+//	Authorization: Bearer u1s1-xxx        （普通 u1s1- key 通道 / 只读兼容兜底）
 //	User-Agent: pi ({os.platform()} {os.release()}; {os.arch()})
 //	    例: pi (darwin 24.6.0; arm64)
-//	x-u1s1-version: 1.2.1          ← 网关按此识别客户端版本
+//	x-u1s1-version: 1.2.3          ← 网关按此识别客户端版本
+//	X-Stainless-Lang: js
+//	X-Stainless-Package-Version: 6.40.0
+//	X-Stainless-OS: MacOS|Linux|Windows   （normalizePlatform 映射）
+//	X-Stainless-Arch: arm64|x64
+//	X-Stainless-Runtime: node
+//	X-Stainless-Runtime-Version: v22.x.x  （便携包 Node ≥22.19）
+//	X-Stainless-Retry-Count: 0
+//
+// 设备凭证模式（u1s1 login 浏览器批准，u1s1d- token + DPoP）下，官方客户端签名代理还会附加：
+//
+//	Authorization: DPoP u1s1d-xxx
+//	dpop: <header.payload.sig>   （每请求新签，见 upstream/device.go）
+//	x-u1s1-client: terminal|web|desktop|cloud
+//	x-u1s1-platform: {os.platform()}-{os.arch()}   例: darwin-arm64
+//
+// 注意：x-u1s1-client / x-u1s1-platform / DPoP 仅设备凭证模式使用，普通 u1s1- key
+// 通道不发这三个头（官方 authorizedFetch 的 api_key 兜底分支只发 Bearer + x-u1s1-version）。
 //	X-Stainless-Lang: js
 //	X-Stainless-Package-Version: 6.40.0
 //	X-Stainless-OS: MacOS|Linux|Windows   （normalizePlatform 映射）
@@ -74,8 +91,16 @@ var Profiles = []Profile{
 	},
 }
 
-// OpenAI SDK 版本号（u1s1-cli 0.19.5 内嵌 openai 6.40.0）。
+// OpenAI SDK 版本号（u1s1-cli 1.2.3 内嵌 @earendil-works/pi-ai 0.84.3 → openai 6.40.0）。
 const SDKPackageVersion = "6.40.0"
+
+// ClientSurface x-u1s1-client 头：u1s1-cli 终端运行默认 terminal（可被 U1S1_CLIENT 覆盖）。
+const ClientSurface = "terminal"
+
+// ClientPlatform x-u1s1-platform 头：node os.platform() + process.arch，如 darwin-arm64。
+func ClientPlatform(p Profile) string {
+	return p.UAPlatform + "-" + p.UAArch
+}
 
 // ProfileByID 按 ID 查档案。
 func ProfileByID(id string) (Profile, bool) {

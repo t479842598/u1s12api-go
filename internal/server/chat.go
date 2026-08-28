@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -202,52 +204,113 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("所有 U1S1 Key 尝试均失败（最后错误: %.300s）", lastErrBody))
 }
 
+// deviceQuotaSortKey 设备账号的剩余额度排序键（降序：额度最多者优先直接调用）。
+// login_checkin_remaining 是登录打卡加量包剩余；未知(-1)视为最后（不清楚剩余，不优先）。
+func deviceQuotaSortKey(a *store.Account) int64 {
+	if a.LoginCheckinRemaining < 0 {
+		return math.MaxInt64
+	}
+	return a.LoginCheckinRemaining
+}
+
+// markDeviceExhausted 记录某设备账号当日触发 quota_exceeded，冷却到次日北京时间 0 点。
+func (s *Server) markDeviceExhausted(accountID int64, until time.Time) {
+	s.deviceQuotaExhaustedMu.Lock()
+	defer s.deviceQuotaExhaustedMu.Unlock()
+	if s.deviceQuotaExhausted == nil {
+		s.deviceQuotaExhausted = map[int64]time.Time{}
+	}
+	s.deviceQuotaExhausted[accountID] = until
+}
+
+// deviceIsExhausted 判断设备账号是否处于当日额度耗尽冷却期。
+func (s *Server) deviceIsExhausted(accountID int64) bool {
+	s.deviceQuotaExhaustedMu.Lock()
+	defer s.deviceQuotaExhaustedMu.Unlock()
+	until, ok := s.deviceQuotaExhausted[accountID]
+	return ok && time.Now().Before(until)
+}
+
 // tryDeviceChatCompletion 尝试用已授权官网账号的设备凭证（DPoP + 指纹头）转发对话。
-// 无已授权账号返回 false（走 u1s1- Key 池）；账号存在但调用失败也返回 false 让上层回退。
-// 成功（含已写响应）返回 true。
+// 无已授权账号返回 false（走 u1s1- Key 池）。
+//
+// 多账号调度策略：按剩余额度降序——**有额度的账号直接调用**（额度最多者优先）；
+// 仅当其触发 quota_exceeded（当日额度耗尽）被标记冷却后，本请求切到下一个
+// 有额度的账号，后续请求不再调用已冷却账号。全部耗尽/失败才返回 false 回退 Key 池。
 func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request, localKeyName string, req *chatReq, forwardBody []byte, started time.Time) bool {
 	accounts, err := s.store.ListAuthorizedEnabledAccounts()
 	if err != nil || len(accounts) == 0 {
 		return false
 	}
-	acc := accounts[0]
-	cred, err := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
-	if err != nil {
-		logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, err)
-		return false
-	}
-	dc := s.deviceClient()
-	resp, cerr := dc.DeviceChat(r.Context(), cred, forwardBody)
-	if cerr != nil {
-		var apiErr *upstream.APIError
-		if asAPIError(cerr, &apiErr) {
-			logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
-			// 设备凭证失效等关键错误：记录后回退池。
-			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
-		} else {
-			logger.Warnf("设备通道网络错误 account=%s: %v", acc.Email, cerr)
-			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, 0, 0, 0, 0, "error", truncate(cerr.Error(), 1000), clientIP(r))
+
+	// 过滤已标记当日额度耗尽的账号。
+	candidates := make([]*store.Account, 0, len(accounts))
+	for _, a := range accounts {
+		if s.deviceIsExhausted(a.ID) {
+			continue
 		}
+		candidates = append(candidates, a)
+	}
+	if len(candidates) == 0 {
 		return false
 	}
 
-	// 成功透传。
-	usageIn, usageOut, recErr := s.pipeResponse(w, r, resp, req.Stream)
-	tokens := usageIn + usageOut
-	if tokens > 0 {
-		_ = s.store.TouchAccount(acc.ID, tokens)
+	// 尝试顺序：按剩余额度降序——额度最多的账号直接调用；
+	// 触发 quota_exceeded 被标记冷却后，轮询到下一个有额度的账号。
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return deviceQuotaSortKey(candidates[i]) > deviceQuotaSortKey(candidates[j])
+	})
+	order := candidates
+
+	dc := s.deviceClient()
+	for _, acc := range order {
+		if s.deviceIsExhausted(acc.ID) {
+			continue // 本请求内可能刚被标记
+		}
+		cred, cerr := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+		if cerr != nil {
+			logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, cerr)
+			continue
+		}
+		resp, derr := dc.DeviceChat(r.Context(), cred, forwardBody)
+		if derr != nil {
+			var apiErr *upstream.APIError
+			if asAPIError(derr, &apiErr) {
+				logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
+				s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+				if upstream.QuotaSignal(apiErr.StatusCode, apiErr.Body) {
+					// 当日额度耗尽：标记该设备冷却，切到下一个有额度的账号。
+					s.markDeviceExhausted(acc.ID, upstream.NextBeijingMidnight(time.Now()))
+					logger.Infof("设备账号当日额度耗尽，标记冷却 account=%s（北京时间 0 点恢复）", acc.Email)
+				}
+				continue
+			}
+			logger.Warnf("设备通道网络错误 account=%s: %v", acc.Email, derr)
+			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, 0, 0, 0, 0, "error", truncate(derr.Error(), 1000), clientIP(r))
+			continue
+		}
+
+		// 成功透传。
+		usageIn, usageOut, recErr := s.pipeResponse(w, r, resp, req.Stream)
+		tokens := usageIn + usageOut
+		if tokens > 0 {
+			_ = s.store.TouchAccount(acc.ID, tokens)
+		}
+		status := "success"
+		errMsg := ""
+		if recErr != nil {
+			status = "error"
+			errMsg = truncate(recErr.Error(), 1000)
+		}
+		cost := s.estimateCost(req.Model, usageIn, usageOut)
+		s.recordRequestFull(localKeyName, req.Model, 0, req.Stream, started, resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
+		logger.Infof("设备通道 chat 完成 account=%s model=%s stream=%v status=%s in=%d out=%d",
+			acc.Email, req.Model, req.Stream, status, usageIn, usageOut)
+		return true
 	}
-	status := "success"
-	errMsg := ""
-	if recErr != nil {
-		status = "error"
-		errMsg = truncate(recErr.Error(), 1000)
-	}
-	cost := s.estimateCost(req.Model, usageIn, usageOut)
-	s.recordRequestFull(localKeyName, req.Model, 0, req.Stream, started, resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
-	logger.Infof("设备通道 chat 完成 account=%s model=%s stream=%v status=%s in=%d out=%d",
-		acc.Email, req.Model, req.Stream, status, usageIn, usageOut)
-	return true
+
+	// 全部设备账号失败/已耗尽 → 回退 Key 池。
+	return false
 }
 
 // pipeResponse 把上游响应透传给客户端；流式时边转发边扫描用量 chunk。
