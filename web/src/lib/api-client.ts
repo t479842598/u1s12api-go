@@ -14,6 +14,10 @@ import type {
   SettingsData,
   ChatTestResult,
   LogsData,
+  AccountsData,
+  DeviceStartResult,
+  DeviceConfirmResult,
+  CheckinAllResult,
 } from "@/types"
 
 const API_BASE = "/admin/api"
@@ -178,4 +182,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ egress_proxy }),
     }),
+
+  // 官网账号（设备授权 + 签到）
+  accounts: () => request<AccountsData>("/accounts"),
+  addAccount: (email: string, password: string, note: string) =>
+    request<{ added: boolean }>("/accounts", {
+      method: "POST",
+      body: JSON.stringify({ email, password, note }),
+    }),
+  updateAccount: (id: number, fields: { enabled?: boolean; note?: string }) =>
+    request<unknown>(`/accounts/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+  deleteAccount: (id: number) =>
+    request<unknown>(`/accounts/${id}`, { method: "DELETE" }),
+  deviceStart: (id: number) =>
+    request<DeviceStartResult>(`/accounts/${id}/device/start`, { method: "POST" }),
+  deviceConfirm: (id: number) =>
+    request<DeviceConfirmResult>(`/accounts/${id}/device/confirm`, { method: "POST" }),
+  checkAllCheckin: () =>
+    request<CheckinAllResult>("/accounts/check-all-checkin", { method: "POST" }),
 }

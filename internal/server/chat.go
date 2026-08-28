@@ -129,7 +129,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 优先设备凭证通道：若存在已授权且启用的官网账号，用其设备凭证（DPoP + 指纹头）
+	// 调上游，消耗「仅限 u1s1 客户端使用」的加量包。失败则回退下方 u1s1- Key 池。
 	started := time.Now()
+	if s.tryDeviceChatCompletion(w, r, localKeyName, &req, forwardBody, started) {
+		return
+	}
+
 	maxAttempts := 3
 	var lastErrBody string
 
@@ -194,6 +200,54 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	writeOpenAIError(w, http.StatusBadGateway, "all_keys_failed",
 		fmt.Sprintf("所有 U1S1 Key 尝试均失败（最后错误: %.300s）", lastErrBody))
+}
+
+// tryDeviceChatCompletion 尝试用已授权官网账号的设备凭证（DPoP + 指纹头）转发对话。
+// 无已授权账号返回 false（走 u1s1- Key 池）；账号存在但调用失败也返回 false 让上层回退。
+// 成功（含已写响应）返回 true。
+func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request, localKeyName string, req *chatReq, forwardBody []byte, started time.Time) bool {
+	accounts, err := s.store.ListAuthorizedEnabledAccounts()
+	if err != nil || len(accounts) == 0 {
+		return false
+	}
+	acc := accounts[0]
+	cred, err := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+	if err != nil {
+		logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, err)
+		return false
+	}
+	dc := s.deviceClient()
+	resp, cerr := dc.DeviceChat(r.Context(), cred, forwardBody)
+	if cerr != nil {
+		var apiErr *upstream.APIError
+		if asAPIError(cerr, &apiErr) {
+			logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
+			// 设备凭证失效等关键错误：记录后回退池。
+			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+		} else {
+			logger.Warnf("设备通道网络错误 account=%s: %v", acc.Email, cerr)
+			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, 0, 0, 0, 0, "error", truncate(cerr.Error(), 1000), clientIP(r))
+		}
+		return false
+	}
+
+	// 成功透传。
+	usageIn, usageOut, recErr := s.pipeResponse(w, r, resp, req.Stream)
+	tokens := usageIn + usageOut
+	if tokens > 0 {
+		_ = s.store.TouchAccount(acc.ID, tokens)
+	}
+	status := "success"
+	errMsg := ""
+	if recErr != nil {
+		status = "error"
+		errMsg = truncate(recErr.Error(), 1000)
+	}
+	cost := s.estimateCost(req.Model, usageIn, usageOut)
+	s.recordRequestFull(localKeyName, req.Model, 0, req.Stream, started, resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
+	logger.Infof("设备通道 chat 完成 account=%s model=%s stream=%v status=%s in=%d out=%d",
+		acc.Email, req.Model, req.Stream, status, usageIn, usageOut)
+	return true
 }
 
 // pipeResponse 把上游响应透传给客户端；流式时边转发边扫描用量 chunk。

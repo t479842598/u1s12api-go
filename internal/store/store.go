@@ -83,6 +83,26 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model)`,
+		`CREATE TABLE IF NOT EXISTS accounts(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT NOT NULL UNIQUE,
+			password TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			device_token TEXT NOT NULL DEFAULT '',
+			api_key TEXT NOT NULL DEFAULT '',
+			device_id TEXT NOT NULL DEFAULT '',
+			device_private_jwk TEXT NOT NULL DEFAULT '',
+			device_public_jwk TEXT NOT NULL DEFAULT '',
+			device_name TEXT NOT NULL DEFAULT '',
+			authorized INTEGER NOT NULL DEFAULT 0,
+			last_checkin_at INTEGER NOT NULL DEFAULT 0,
+			login_checkin_remaining INTEGER NOT NULL DEFAULT -1,
+			total_requests INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -722,4 +742,206 @@ func (s *Store) SummarySince(since int64) (UsageSummary, error) {
 // RecentRequests 最近 n 条。
 func (s *Store) RecentRequests(n int) ([]*RequestRecord, error) {
 	return s.ListRequests(RequestFilter{Limit: n})
+}
+
+// ---- 官网账号（设备凭证） ----
+
+// Account 官网账号记录（含设备凭证，明文存储与 upstream_keys 一致）。
+type Account struct {
+	ID                   int64  `json:"id"`
+	Email                string `json:"email"`
+	EmailMasked          string `json:"email_masked"`
+	Password             string `json:"password,omitempty"`
+	Note                 string `json:"note"`
+	Enabled              bool   `json:"enabled"`
+	DeviceToken          string `json:"device_token"`
+	DeviceTokenMasked    string `json:"device_token_masked"`
+	APIKey               string `json:"api_key,omitempty"`
+	APIKeyMasked         string `json:"api_key_masked"`
+	DeviceID             string `json:"device_id"`
+	DevicePrivateJWK     string `json:"device_private_jwk,omitempty"`
+	DevicePublicJWK      string `json:"device_public_jwk"`
+	DeviceName           string `json:"device_name"`
+	Authorized           bool   `json:"authorized"`
+	LastCheckinAt        int64  `json:"last_checkin_at"`
+	LoginCheckinRemaining int64 `json:"login_checkin_remaining"`
+	TotalRequests        int64  `json:"total_requests"`
+	TotalTokens          int64  `json:"total_tokens"`
+	CreatedAt            int64  `json:"created_at"`
+	UpdatedAt            int64  `json:"updated_at"`
+}
+
+const accountCols = `id,email,password,note,enabled,device_token,api_key,device_id,
+	device_private_jwk,device_public_jwk,device_name,authorized,last_checkin_at,
+	login_checkin_remaining,total_requests,total_tokens,created_at,updated_at`
+
+func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
+	a := &Account{}
+	var enabled, authorized int
+	err := row.Scan(&a.ID, &a.Email, &a.Password, &a.Note, &enabled, &a.DeviceToken, &a.APIKey,
+		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &authorized,
+		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.TotalRequests, &a.TotalTokens,
+		&a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	a.Enabled = enabled == 1
+	a.Authorized = authorized == 1
+	a.EmailMasked = MaskEmail(a.Email)
+	a.APIKeyMasked = MaskKey(a.APIKey)
+	a.DeviceTokenMasked = MaskDeviceToken(a.DeviceToken)
+	return a, nil
+}
+
+// MaskEmail 邮箱掩码：t479842598@foxmail.com → t4***@foxmail.com。
+func MaskEmail(email string) string {
+	i := strings.IndexByte(email, '@')
+	if i < 0 {
+		if len(email) <= 2 {
+			return email
+		}
+		return email[:2] + "***"
+	}
+	local, domain := email[:i], email[i:]
+	if len(local) <= 2 {
+		return local + "***" + domain
+	}
+	return local[:2] + "***" + domain
+}
+
+// MaskDeviceToken 设备凭证掩码：u1s1d-xxxx…xxxx。
+func MaskDeviceToken(tok string) string {
+	if len(tok) <= 14 {
+		return tok
+	}
+	return tok[:9] + "…" + tok[len(tok)-4:]
+}
+
+// AddAccount 新增账号（email 唯一）。重复返回 false。
+func (s *Store) AddAccount(email, password, note string) (bool, error) {
+	email = strings.TrimSpace(email)
+	now := time.Now().Unix()
+	res, err := s.db.Exec(`INSERT OR IGNORE INTO accounts(email,password,note,created_at,updated_at) VALUES(?,?,?,?,?)`,
+		email, password, strings.TrimSpace(note), now, now)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ListAccounts 全量列出（按创建顺序）。
+func (s *Store) ListAccounts() ([]*Account, error) {
+	rows, err := s.db.Query(`SELECT ` + accountCols + ` FROM accounts ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Account
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// GetAccount 按 id 取账号（含完整凭证）。
+func (s *Store) GetAccount(id int64) (*Account, error) {
+	row := s.db.QueryRow(`SELECT `+accountCols+` FROM accounts WHERE id=?`, id)
+	a, err := scanAccount(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("账号 %d 不存在", id)
+		}
+		return nil, err
+	}
+	return a, nil
+}
+
+// SaveAccountDeviceCredential 写入设备凭证并标记已授权。
+func (s *Store) SaveAccountDeviceCredential(id int64, deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET device_token=?, api_key=?, device_id=?,
+		device_private_jwk=?, device_public_jwk=?, device_name=?, authorized=1, updated_at=?
+		WHERE id=?`,
+		deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, time.Now().Unix(), id)
+	return err
+}
+
+// ListAuthorizedEnabledAccounts 返回已授权且启用的账号（供每日签到、设备通道使用）。
+func (s *Store) ListAuthorizedEnabledAccounts() ([]*Account, error) {
+	rows, err := s.db.Query(`SELECT `+accountCols+` FROM accounts WHERE authorized=1 AND enabled=1 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Account
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// CountAuthorizedEnabled 已授权且启用账号数。
+func (s *Store) CountAuthorizedEnabled() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM accounts WHERE authorized=1 AND enabled=1`).Scan(&n)
+	return n, err
+}
+
+// UpdateAccount 更新启用/备注。字段 map：enabled bool / note string。
+func (s *Store) UpdateAccount(id int64, fields map[string]any) error {
+	sets := []string{}
+	args := []any{}
+	if v, ok := fields["enabled"]; ok {
+		sets = append(sets, "enabled=?")
+		args = append(args, v)
+	}
+	if v, ok := fields["note"]; ok {
+		sets = append(sets, "note=?")
+		args = append(args, v)
+	}
+	sets = append(sets, "updated_at=?")
+	args = append(args, time.Now().Unix(), id)
+	if len(sets) == 0 {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE accounts SET `+strings.Join(sets, ",")+` WHERE id=?`, args...)
+	return err
+}
+
+// TouchAccount 记录一次设备通道调用（请求数/令牌/最近使用）。
+func (s *Store) TouchAccount(id int64, tokens int64) error {
+	_, err := s.db.Exec(`UPDATE accounts SET total_requests=total_requests+1,
+		total_tokens=total_tokens+?, updated_at=? WHERE id=?`, tokens, time.Now().Unix(), id)
+	return err
+}
+
+// MarkAccountCheckin 记录一次签到结果。
+func (s *Store) MarkAccountCheckin(id int64, remaining int64) error {
+	_, err := s.db.Exec(`UPDATE accounts SET last_checkin_at=?, login_checkin_remaining=?, updated_at=? WHERE id=?`,
+		time.Now().Unix(), remaining, time.Now().Unix(), id)
+	return err
+}
+
+// LatestCheckinAt 全部账号中最近的签到时间（unix 秒）；无则返回 0。供启动补签判断。
+func (s *Store) LatestCheckinAt() int64 {
+	var v sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(last_checkin_at) FROM accounts`).Scan(&v)
+	if err != nil || !v.Valid {
+		return 0
+	}
+	return v.Int64
+}
+
+// DeleteAccount 删除。
+func (s *Store) DeleteAccount(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM accounts WHERE id=?`, id)
+	return err
 }

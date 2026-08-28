@@ -4,6 +4,7 @@ import LoginPage from "@/pages/LoginPage"
 import DashboardPage from "@/pages/DashboardPage"
 import UpstreamKeysPage from "@/pages/UpstreamKeysPage"
 import LocalKeysPage from "@/pages/LocalKeysPage"
+import AccountsPage from "@/pages/AccountsPage"
 import RequestsPage from "@/pages/RequestsPage"
 import ModelTestPage from "@/pages/ModelTestPage"
 import LogsPage from "@/pages/LogsPage"
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: "dashboard", element: <DashboardPage /> },
       { path: "u1s1-keys", element: <UpstreamKeysPage /> },
       { path: "keys", element: <LocalKeysPage /> },
+      { path: "accounts", element: <AccountsPage /> },
       { path: "requests", element: <RequestsPage /> },
       { path: "model-test", element: <ModelTestPage /> },
       { path: "logs", element: <LogsPage /> },

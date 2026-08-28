@@ -253,3 +253,48 @@ export interface LogEntry {
 export interface LogsData {
   items: LogEntry[]
 }
+
+// ---- 官网账号（设备授权 + 签到） ----
+
+export interface AccountItem {
+  id: number
+  email: string
+  email_masked: string
+  note: string
+  enabled: boolean
+  authorized: boolean
+  device_token_masked: string
+  api_key_masked: string
+  device_id: string
+  device_name: string
+  last_checkin_at: number
+  login_checkin_remaining: number
+  total_requests: number
+  total_tokens: number
+  created_at: number
+  updated_at: number
+}
+
+export interface AccountsData {
+  accounts: AccountItem[]
+}
+
+export interface DeviceStartResult {
+  account_id: number
+  verify_url: string
+  expires_in: number
+  interval: number
+}
+
+export interface DeviceConfirmResult {
+  authorized: boolean
+  device_id: string
+  api_key: string
+  device_token: string
+}
+
+export interface CheckinAllResult {
+  ok: number
+  total: number
+  results: { account_id: number; email: string; ok: boolean; remaining: number; error?: string }[]
+}

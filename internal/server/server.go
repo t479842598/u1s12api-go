@@ -51,6 +51,9 @@ type Server struct {
 
 	modelsMu    sync.Mutex
 	modelsCache *modelsCacheEntry
+
+	// 官网账号设备授权（内存态）与每日签到。
+	pending *pendingDeviceMap
 }
 
 type atomicValue struct {
@@ -77,6 +80,7 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 		staticFS:    staticFS,
 		projectRoot: projectRoot,
 		throttle:    newLoginThrottle(5, 15*time.Minute),
+		pending:     &pendingDeviceMap{},
 	}
 	s.cfg.Store(cfg)
 
@@ -101,6 +105,9 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 	if cfg.QuotaAutoRefresh {
 		go s.quotaAutoRefreshLoop()
 	}
+
+	// 每日自动签到（有已授权账号时才跑；无账号时空转无害）。
+	go s.checkinAutoLoop()
 	return s, nil
 }
 
@@ -191,6 +198,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /admin/api/local-keys/{name}", s.requireAdmin(s.handleUpdateLocalKey))
 	mux.HandleFunc("DELETE /admin/api/local-keys/{name}", s.requireAdmin(s.handleDeleteLocalKey))
 	mux.HandleFunc("POST /admin/api/local-keys/{name}/copy", s.requireAdmin(s.handleCopyLocalKey))
+	mux.HandleFunc("GET /admin/api/accounts", s.requireAdmin(s.handleListAccounts))
+	mux.HandleFunc("POST /admin/api/accounts", s.requireAdmin(s.handleAddAccount))
+	mux.HandleFunc("PUT /admin/api/accounts/{id}", s.requireAdmin(s.handleUpdateAccount))
+	mux.HandleFunc("DELETE /admin/api/accounts/{id}", s.requireAdmin(s.handleDeleteAccount))
+	mux.HandleFunc("POST /admin/api/accounts/{id}/device/start", s.requireAdmin(s.handleDeviceStart))
+	mux.HandleFunc("POST /admin/api/accounts/{id}/device/confirm", s.requireAdmin(s.handleDeviceConfirm))
+	mux.HandleFunc("POST /admin/api/accounts/check-all-checkin", s.requireAdmin(s.handleCheckAllCheckin))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))
