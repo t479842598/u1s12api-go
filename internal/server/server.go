@@ -216,6 +216,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/accounts/one-click/confirm", s.requireAdmin(s.handleOneClickConfirm))
 	mux.HandleFunc("POST /admin/api/accounts/check-all-checkin", s.requireAdmin(s.handleCheckAllCheckin))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/checkin", s.requireAdmin(s.handleCheckinOne))
+	mux.HandleFunc("POST /admin/api/accounts/{id}/quota-refresh", s.requireAdmin(s.handleQuotaRefreshOne))
 	mux.HandleFunc("GET /admin/api/accounts/{id}/credential", s.requireAdmin(s.handleAccountCredential))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))

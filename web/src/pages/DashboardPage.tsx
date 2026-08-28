@@ -205,6 +205,52 @@ export default function DashboardPage() {
           detail={`累计 $${totals.cost_usd.toFixed(4)}`} loading={loading} />
       </div>
 
+      {/* 账号额度汇总 */}
+      {o?.account_quota && o.account_quota.length > 0 && (
+        <Card className="border-border/60">
+          <CardHeader className="pb-1">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Coins className="size-4 text-primary" />授权账号额度
+              <span className="text-[10px] font-normal text-muted-foreground">各账号加量包剩余总额（自动打卡后刷新）</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-border/60">
+                    <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">账号</th>
+                    <th className="py-1.5 pr-3 text-right font-medium text-muted-foreground">剩余总额</th>
+                    <th className="py-1.5 text-left font-medium text-muted-foreground">明细</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {o.account_quota.map((q) => (
+                    <tr key={q.id} className="border-b border-border/40 last:border-0">
+                      <td className="whitespace-nowrap py-1.5 pr-3">{q.email_masked}</td>
+                      <td className="py-1.5 pr-3 text-right font-medium">{fmtTokens(q.total)}</td>
+                      <td className="py-1.5">
+                        {q.items.length === 0 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            {q.items.map((it) => (
+                              <span key={it.key} className="whitespace-nowrap text-muted-foreground">
+                                {it.label} {fmtTokens(it.remaining)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 请求统计 + 模型/Key 用量 */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">

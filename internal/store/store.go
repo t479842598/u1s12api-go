@@ -100,6 +100,7 @@ func (s *Store) migrate() error {
 			login_checkin_remaining INTEGER NOT NULL DEFAULT -1,
 			last_web_checkin_at INTEGER NOT NULL DEFAULT 0,
 			web_checkin_status TEXT NOT NULL DEFAULT '',
+			packages_json TEXT NOT NULL DEFAULT '',
 			total_requests INTEGER NOT NULL DEFAULT 0,
 			total_tokens INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
@@ -115,6 +116,7 @@ func (s *Store) migrate() error {
 	for _, stmt := range []string{
 		`ALTER TABLE accounts ADD COLUMN last_web_checkin_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE accounts ADD COLUMN web_checkin_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE accounts ADD COLUMN packages_json TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate: %w", err)
@@ -779,15 +781,33 @@ type Account struct {
 	LoginCheckinRemaining int64  `json:"login_checkin_remaining"`
 	LastWebCheckinAt      int64  `json:"last_web_checkin_at"`
 	WebCheckinStatus      string `json:"web_checkin_status,omitempty"`
+	// PackagesJSON 上游 /v1/me 返回的加量包快照（JSON 数组，仅入库，不回明文）。
+	PackagesJSON          string `json:"-"`
 	TotalRequests         int64  `json:"total_requests"`
 	TotalTokens           int64  `json:"total_tokens"`
 	CreatedAt             int64  `json:"created_at"`
 	UpdatedAt             int64  `json:"updated_at"`
 }
 
+// AccountPackage 账号加量包快照项（上游 packages 的裁剪字段）。
+type AccountPackage struct {
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	Scope       string `json:"scope"`
+	Note        string `json:"note"`
+	Remaining   int64  `json:"remaining"`
+	DailyTokens *int64 `json:"daily_tokens"`
+	TotalTokens *int64 `json:"total_tokens"`
+	UsedToday   int64  `json:"used_today"`
+	UsedTokens  int64  `json:"used_tokens"`
+	ExpiresAt   string `json:"expires_at"`
+	CreatedAt   string `json:"created_at"`
+}
+
 const accountCols = `id,email,password,note,enabled,device_token,api_key,device_id,
 	device_private_jwk,device_public_jwk,device_name,authorized,last_checkin_at,
-	login_checkin_remaining,last_web_checkin_at,web_checkin_status,total_requests,total_tokens,created_at,updated_at`
+	login_checkin_remaining,last_web_checkin_at,web_checkin_status,packages_json,
+	total_requests,total_tokens,created_at,updated_at`
 
 func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	a := &Account{}
@@ -795,7 +815,7 @@ func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	err := row.Scan(&a.ID, &a.Email, &a.Password, &a.Note, &enabled, &a.DeviceToken, &a.APIKey,
 		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &authorized,
 		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.LastWebCheckinAt, &a.WebCheckinStatus,
-		&a.TotalRequests, &a.TotalTokens, &a.CreatedAt, &a.UpdatedAt)
+		&a.PackagesJSON, &a.TotalRequests, &a.TotalTokens, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -974,6 +994,13 @@ func (s *Store) MarkAccountCheckin(id int64, remaining int64) error {
 func (s *Store) MarkAccountWebCheckin(id int64, status string) error {
 	_, err := s.db.Exec(`UPDATE accounts SET last_web_checkin_at=?, web_checkin_status=?, updated_at=? WHERE id=?`,
 		time.Now().Unix(), status, time.Now().Unix(), id)
+	return err
+}
+
+// SaveAccountQuota 保存账号加量包快照与签到剩余（login_checkin 类包剩余合计）。
+func (s *Store) SaveAccountQuota(id int64, packagesJSON string, loginRemaining int64) error {
+	_, err := s.db.Exec(`UPDATE accounts SET packages_json=?, login_checkin_remaining=?, updated_at=? WHERE id=?`,
+		packagesJSON, loginRemaining, time.Now().Unix(), id)
 	return err
 }
 

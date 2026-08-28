@@ -31,9 +31,6 @@ import {
 import { PageLoading } from "@/components/shared/PageLoading"
 import { CheckCircle2, Clock3, ExternalLink, Plus, RefreshCw, Unplug, Copy, KeyRound } from "lucide-react"
 
-// 打卡已改为服务端自动：capcat 人机验证 → 网页登录 → claim（纯 API）；「去打卡」按钮仅保留手动兜底
-const U1S1_CHECKIN_URL = "https://u1s1.io/dashboard#sec-usage"
-
 function fmtTime(unix: number): string {
   if (!unix) return "—"
   return new Date(unix * 1000).toLocaleString("zh-CN")
@@ -311,20 +308,15 @@ export default function AccountsPage() {
     }
   }
 
-  // 复制账号/密码到剪贴板（打卡页手动登录用）。
-  const copyCredential = async (a: AccountItem, what: "email" | "password") => {
-    if (what === "password" && !a.has_password) {
-      toast.error(`账号 ${a.email_masked} 未保存密码，请先设置密码`)
-      openPwd(a)
-      return
-    }
-    setBusy(`cred-${a.id}`)
+  // 刷新单账号额度快照（/v1/me 拉取加量包）。
+  const refreshQuota = async (a: AccountItem) => {
+    setBusy(`quota-${a.id}`)
     try {
-      const r = await api.accountCredential(a.id)
-      await navigator.clipboard.writeText(what === "email" ? r.email : r.password)
-      toast.success(what === "email" ? "账号邮箱已复制，去打卡页粘贴登录" : "密码已复制")
+      await api.accountQuotaRefresh(a.id)
+      toast.success(`${a.email_masked} 额度已刷新`)
+      load()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "复制失败")
+      toast.error(err instanceof Error ? err.message : "刷新额度失败")
     } finally {
       setBusy(null)
     }
@@ -374,7 +366,7 @@ export default function AccountsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">账号列表</CardTitle>
-          <CardDescription>录入账号并保存官网密码后，服务端自动完成设备授权与每日网页打卡（capcat 人机验证纯 API 求解，无需真浏览器）；「去打卡」仅在需要时手动打开官网</CardDescription>
+          <CardDescription>录入账号并保存官网密码后，服务端自动完成设备授权与每日网页打卡（capcat 人机验证纯 API 求解，无需真浏览器）；账号列表展示各账号剩余额度（固定/每日赠送/邀请/签到）</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -382,7 +374,7 @@ export default function AccountsPage() {
               <TableRow>
                 <TableHead>账号</TableHead>
                 <TableHead>授权状态</TableHead>
-                <TableHead>签到剩余</TableHead>
+                <TableHead>剩余额度</TableHead>
                 <TableHead>最近签到</TableHead>
                 <TableHead className="text-right">操作</TableHead>
               </TableRow>
@@ -416,7 +408,20 @@ export default function AccountsPage() {
                       <Badge variant="outline" className="gap-1"><Unplug className="h-3 w-3" /> 未授权</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs">{fmtTokens(a.login_checkin_remaining)}</TableCell>
+                  <TableCell>
+                    {a.quota && a.quota.total > 0 ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium">{fmtTokens(a.quota.total)}</span>
+                        <span className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+                          {a.quota.items.map((it) => (
+                            <span key={it.key}>{it.label} {fmtTokens(it.remaining)}</span>
+                          ))}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">{a.login_checkin_remaining > 0 ? fmtTokens(a.login_checkin_remaining) : "—"}</span>
+                    )}
+                  </TableCell>
                   <TableCell className="whitespace-nowrap text-xs">
                     {a.web_checkin_status ? (
                       <div className="flex flex-col gap-0.5">
@@ -433,15 +438,15 @@ export default function AccountsPage() {
                     <div className="flex justify-end gap-2 flex-wrap">
                       {a.authorized ? (
                         <>
-                          <Button size="sm" variant="outline" title="打开官网打卡页（手动兜底）"
-                            onClick={() => window.open(U1S1_CHECKIN_URL, "_blank")}>
-                            <ExternalLink className="mr-1 h-3 w-3" />
-                            去打卡
-                          </Button>
                           <Button size="sm" variant="ghost" disabled={busy === `checkin-${a.id}`}
                             onClick={() => checkinOne(a)}>
                             <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
                             打卡
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={busy === `quota-${a.id}`}
+                            onClick={() => refreshQuota(a)}>
+                            <RefreshCw className={`mr-1 h-3 w-3 ${busy === `quota-${a.id}` ? "animate-spin" : ""}`} />
+                            刷额度
                           </Button>
                         </>
                       ) : (
@@ -451,16 +456,6 @@ export default function AccountsPage() {
                           授权
                         </Button>
                       )}
-                      <Button size="sm" variant="ghost" title="复制完整邮箱，登录官网打卡页用"
-                        disabled={busy === `cred-${a.id}`} onClick={() => copyCredential(a, "email")}>
-                        <Copy className="mr-1 h-3 w-3" />
-                        复制账号
-                      </Button>
-                      <Button size="sm" variant="ghost" title="复制已保存的官网密码"
-                        disabled={busy === `cred-${a.id}`} onClick={() => copyCredential(a, "password")}>
-                        <Copy className="mr-1 h-3 w-3" />
-                        复制密码
-                      </Button>
                       <Button size="sm" variant="outline" disabled={busy === `pwd-${a.id}`}
                         onClick={() => openPwd(a)}>
                         <KeyRound className="mr-1 h-3 w-3" />

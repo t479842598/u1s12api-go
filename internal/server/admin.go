@@ -111,6 +111,28 @@ func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
 
 	cfg := s.getSettings()
 	fp := s.fp.Current()
+
+	// 授权账号额度汇总（来自库内快照，不做实时请求）。
+	accAccounts, err := s.store.ListAccounts()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	accQuota := []map[string]any{}
+	for _, a := range accAccounts {
+		if !a.Authorized || !a.Enabled {
+			continue
+		}
+		view := buildAccountQuotaView(a)
+		accQuota = append(accQuota, map[string]any{
+			"id":          a.ID,
+			"email_masked": a.EmailMasked,
+			"total":       view.Total,
+			"updated_at":  view.UpdatedAt,
+			"items":       view.Items,
+		})
+	}
+
 	writeAPIData(w, http.StatusOK, map[string]any{
 		"today":  today,
 		"totals": allTime,
@@ -118,6 +140,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
 		"daily":  daily,
 		"models": models,
 		"recent": recent,
+		"account_quota": accQuota,
 		"fingerprint": map[string]any{
 			"profile":    fp.ID,
 			"label":      fp.Label,

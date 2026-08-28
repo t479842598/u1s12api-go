@@ -89,6 +89,9 @@ func (s *Server) runQuotaAutoRefresh() {
 			logger.Warnf("配额定时刷新：key #%d 检查失败: %s", r.ID, r.Error)
 		}
 	}
+	// 顺带刷新授权账号的加量包快照（/v1/me，每日重置后数字同步）。
+	accOK, accFail := s.refreshAllDeviceQuotas()
+	logger.Infof("账号额度快照刷新完成: 成功 %d 失败 %d", accOK, accFail)
 }
 
 // checkAllQuotas 全量检查所有上游 Key 配额（调用方需已持有 quotaChecking 互斥权）。

@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -65,6 +66,12 @@ func (s *Server) webCheckinOne(acc *store.Account) error {
 		return err
 	}
 	_ = s.store.MarkAccountCheckin(acc.ID, res.Tokens)
+	// 刷新加量包快照（含刚领取的 login_checkin 包）。
+	qctx, qcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if _, qerr := s.refreshAccountQuota(qctx, acc.ID); qerr != nil {
+		logger.Warnf("网页打卡: 刷新额度快照失败: %v", qerr)
+	}
+	qcancel()
 	status := fmt.Sprintf("已打卡 %d 万 Token（连续 %d 天）", res.Tokens/10000, res.Streak)
 	if res.Tokens > 0 && res.Tokens%10000 != 0 {
 		status = fmt.Sprintf("已打卡 %d Token（连续 %d 天）", res.Tokens, res.Streak)
@@ -85,6 +92,16 @@ func (s *Server) dpopCheckinOne(acc *store.Account) error {
 	me, err := dc.DeviceMe(ctx, cred)
 	if err != nil {
 		return err
+	}
+	// 同步加量包快照。
+	if raw, merr := json.Marshal(me.Packages); merr == nil {
+		remaining := int64(0)
+		for _, p := range me.Packages {
+			if p.Kind == "login_checkin" || p.Kind == "login_checkin_bonus" {
+				remaining += p.Remaining
+			}
+		}
+		_ = s.store.SaveAccountQuota(acc.ID, string(raw), remaining)
 	}
 	remaining := int64(-1)
 	if me.LoginCheckinRemaining != nil {

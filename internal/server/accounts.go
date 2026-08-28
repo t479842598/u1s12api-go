@@ -4,30 +4,59 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/t479842598/u1s12api-go/internal/store"
 )
 
 // handleListAccounts 账号列表（不回明文密码/完整凭证）。
+// accountListItem 账号列表项：Account + 额度分组视图。
+type accountListItem struct {
+	*store.Account
+	Quota accountQuotaView `json:"quota"`
+}
+
 func (s *Server) handleListAccounts(w http.ResponseWriter, _ *http.Request) {
 	accounts, err := s.store.ListAccounts()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if accounts == nil {
-		accounts = []*store.Account{}
-	}
+	items := make([]accountListItem, 0, len(accounts))
 	for _, a := range accounts {
 		a.Password = ""
 		a.DeviceToken = ""
 		a.APIKey = ""
 		a.DevicePrivateJWK = ""
+		items = append(items, accountListItem{Account: a, Quota: buildAccountQuotaView(a)})
 	}
-	writeAPIData(w, http.StatusOK, map[string]any{"accounts": accounts})
+	writeAPIData(w, http.StatusOK, map[string]any{"accounts": items})
+}
+
+// handleQuotaRefreshOne 手动刷新单账号额度快照（/v1/me 拉取加量包并入库）。
+func (s *Server) handleQuotaRefreshOne(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "账号 id 非法")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	remaining, err := s.refreshAccountQuota(ctx, id)
+	if err != nil {
+		writeAPIError(w, http.StatusBadGateway, "刷新额度失败: "+err.Error())
+		return
+	}
+	acc, err := s.store.GetAccount(id)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeAPIData(w, http.StatusOK, map[string]any{"ok": true, "login_checkin_remaining": remaining, "quota": buildAccountQuotaView(acc)})
 }
 
 // handleAddAccount 新增账号（email + password）。

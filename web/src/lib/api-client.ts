@@ -20,6 +20,7 @@ import type {
   CheckinAllResult,
   OneClickStartResult,
   OneClickConfirmResult,
+  AccountQuota,
 } from "@/types"
 
 const API_BASE = "/admin/api"
@@ -217,6 +218,6 @@ export const api = {
       `/accounts/${id}/checkin`,
       { method: "POST" },
     ),
-  accountCredential: (id: number) =>
-    request<{ email: string; password: string }>(`/accounts/${id}/credential`),
+  accountQuotaRefresh: (id: number) =>
+    request<{ ok: boolean; quota: AccountQuota }>(`/accounts/${id}/quota-refresh`, { method: "POST" }),
 }

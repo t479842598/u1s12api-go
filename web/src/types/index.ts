@@ -72,6 +72,7 @@ export interface OverviewData {
   upstream_base_url: string
   u1s1_version: string
   announcement?: unknown
+  account_quota?: AccountQuotaSummary[]
 }
 
 // ---- 上游模型 ----
@@ -256,6 +257,26 @@ export interface LogsData {
 
 // ---- 官网账号（设备授权 + 签到） ----
 
+export interface QuotaItem {
+  key: string
+  label: string
+  remaining: number
+}
+
+export interface AccountQuota {
+  total: number
+  updated_at: number
+  items: QuotaItem[]
+}
+
+export interface AccountQuotaSummary {
+  id: number
+  email_masked: string
+  total: number
+  updated_at: number
+  items: QuotaItem[]
+}
+
 export interface AccountItem {
   id: number
   email: string
@@ -272,6 +293,7 @@ export interface AccountItem {
   login_checkin_remaining: number
   last_web_checkin_at: number
   web_checkin_status?: string
+  quota?: AccountQuota
   total_requests: number
   total_tokens: number
   created_at: number

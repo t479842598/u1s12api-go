@@ -381,11 +381,17 @@ type DeviceMeResult struct {
 
 // MePackage /v1/me packages 里的单个加量包。
 type MePackage struct {
-	Kind      string `json:"kind"`
-	Note      string `json:"note"`
-	Remaining int64  `json:"remaining"`
-	UsedToday int64  `json:"used_today"`
-	ExpiresAt string `json:"expires_at"`
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	Scope       string `json:"scope"`
+	DailyTokens *int64 `json:"daily_tokens"`
+	TotalTokens *int64 `json:"total_tokens"`
+	UsedToday   int64  `json:"used_today"`
+	UsedTokens  int64  `json:"used_tokens"`
+	Remaining   int64  `json:"remaining"`
+	ExpiresAt   string `json:"expires_at"`
+	Note        string `json:"note"`
+	CreatedAt   string `json:"created_at"`
 }
 
 // DeviceMe 用设备凭证调 GET /v1/me（触发每日加量包发放），返回裁剪结果。
