@@ -81,7 +81,9 @@ func (s *Service) NewSession(ctx context.Context, email, password string) (*http
 	return client, nil
 }
 
-// CheckIn 完成一次网页打卡：登录拿会话 → 再求解 → claim，并顺带领取其他可用加量包。
+// CheckIn 完成一次网页打卡：登录拿会话 → claim 每日签到 → 顺带领取其他可用加量包。
+// 返回 err 仅表示硬失败（登录/capcat 求解）；主打卡业务失败（如今天已打过卡）
+// 会记录到 res.Claims 并继续尝试附加包，不当作硬错误。
 func (s *Service) CheckIn(ctx context.Context, email, password string) (*Result, error) {
 	client, err := s.NewSession(ctx, email, password)
 	if err != nil {
@@ -95,7 +97,13 @@ func (s *Service) CheckIn(ctx context.Context, email, password string) (*Result,
 	}
 	res, err := s.claim(ctx, client, capToken2)
 	if err != nil {
-		return nil, err
+		// 主打卡失败（如今天已打过卡）：拉 /api/me 补连续天数，继续尝试附加包。
+		res = &Result{Claims: []ClaimResult{}}
+		if me, merr := s.fetchMe(ctx, client); merr == nil && me.LoginCheckin != nil {
+			res.Streak = me.LoginCheckin.Streak
+			res.LongestStreak = me.LoginCheckin.LongestStreak
+		}
+		res.Claims = append(res.Claims, ClaimResult{Kind: "login_checkin", Label: "每日签到", Error: err.Error()})
 	}
 	// 顺带领取其他可用的加量包（邀请 500 万/新用户/500 万临时加量包）。
 	s.claimExtras(ctx, client, res)
@@ -117,11 +125,15 @@ var extraClaims = []claimKind{
 	{"payment_delay_gift", "临时加量包", "/api/packages/payment-delay-gift/claim", 5000000},
 }
 
-// meInfo /api/me 中领取状态相关字段。
+// meInfo /api/me 中领取状态与打卡信息相关字段。
 type meInfo struct {
-	InviteClaim         string `json:"invite_claim"`
-	NewUserClaim        string `json:"new_user_claim"`
-	PaymentDelayGiftClaim string `json:"payment_delay_gift_claim"`
+	InviteClaim            string `json:"invite_claim"`
+	NewUserClaim           string `json:"new_user_claim"`
+	PaymentDelayGiftClaim  string `json:"payment_delay_gift_claim"`
+	LoginCheckin           *struct {
+		Streak        int64 `json:"streak"`
+		LongestStreak int64 `json:"longest_streak"`
+	} `json:"login_checkin"`
 }
 
 // fetchMe 拉取 /api/me（带会话），解析各加量包领取状态。

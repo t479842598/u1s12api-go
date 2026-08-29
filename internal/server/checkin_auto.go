@@ -80,12 +80,8 @@ func (s *Server) webCheckinOne(acc *store.Account) error {
 	}
 	for _, c := range res.Claims {
 		if c.OK {
-			t := c.Tokens
-			if t <= 0 {
-				t = 0
-			}
-			if t > 0 {
-				parts = append(parts, fmt.Sprintf("%s %s", c.Label, tokensCN(t)))
+			if c.Tokens > 0 {
+				parts = append(parts, fmt.Sprintf("%s %s", c.Label, tokensCN(c.Tokens)))
 			} else {
 				parts = append(parts, c.Label)
 			}
@@ -94,8 +90,16 @@ func (s *Server) webCheckinOne(acc *store.Account) error {
 	status := "已打卡"
 	if len(parts) > 0 {
 		status += "：" + strings.Join(parts, " + ")
+		status += fmt.Sprintf("（连续 %d 天）", res.Streak)
+	} else {
+		// 全部未成功：展示第一个失败原因。
+		for _, c := range res.Claims {
+			if c.Error != "" {
+				status = "打卡失败：" + truncate(c.Error, 200)
+				break
+			}
+		}
 	}
-	status += fmt.Sprintf("（连续 %d 天）", res.Streak)
 	_ = s.store.MarkAccountWebCheckin(acc.ID, status)
 	return nil
 }
