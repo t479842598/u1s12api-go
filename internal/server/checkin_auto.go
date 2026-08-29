@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,12 +73,45 @@ func (s *Server) webCheckinOne(acc *store.Account) error {
 		logger.Warnf("网页打卡: 刷新额度快照失败: %v", qerr)
 	}
 	qcancel()
-	status := fmt.Sprintf("已打卡 %d 万 Token（连续 %d 天）", res.Tokens/10000, res.Streak)
-	if res.Tokens > 0 && res.Tokens%10000 != 0 {
-		status = fmt.Sprintf("已打卡 %d Token（连续 %d 天）", res.Tokens, res.Streak)
+	// 状态文案：签到 + 顺带领到的加量包（如 500 万临时加量包）。
+	parts := []string{}
+	if res.Tokens > 0 {
+		parts = append(parts, fmt.Sprintf("签到 %s", tokensCN(res.Tokens)))
 	}
+	for _, c := range res.Claims {
+		if c.OK {
+			t := c.Tokens
+			if t <= 0 {
+				t = 0
+			}
+			if t > 0 {
+				parts = append(parts, fmt.Sprintf("%s %s", c.Label, tokensCN(t)))
+			} else {
+				parts = append(parts, c.Label)
+			}
+		}
+	}
+	status := "已打卡"
+	if len(parts) > 0 {
+		status += "：" + strings.Join(parts, " + ")
+	}
+	status += fmt.Sprintf("（连续 %d 天）", res.Streak)
 	_ = s.store.MarkAccountWebCheckin(acc.ID, status)
 	return nil
+}
+
+// tokensCN 中文单位格式化（万/亿），负数给 0。
+func tokensCN(v int64) string {
+	if v <= 0 {
+		return "0"
+	}
+	if v >= 1e8 {
+		return fmt.Sprintf("%.1f 亿", float64(v)/1e8)
+	}
+	if v >= 1e4 {
+		return fmt.Sprintf("%d 万", v/1e4)
+	}
+	return fmt.Sprintf("%d", v)
 }
 
 // dpopCheckinOne 旧机制：用设备凭证调 /v1/me 触发加量包发放。
