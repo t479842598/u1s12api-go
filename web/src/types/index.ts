@@ -226,9 +226,54 @@ export interface SettingsData {
   egress_proxy: string
   fingerprint_profile: string
   u1s1_version: string
+  bark_key: string
+  site_feed_check_hours: number
   log_level: string
   profiles: ProfileSummary[]
   current_profile: string
+}
+
+// ---- 官网动态（公告 / 更新记录） ----
+
+export interface SitePostItem {
+  id: number
+  kind: "announcement" | "changelog"
+  post_key: string
+  title: string
+  summary: string
+  url?: string
+  published_at?: string
+  first_seen_at: number
+}
+
+export interface SitefeedData {
+  last_check_at: number
+  next_check_at: number
+  check_interval_h: number
+  bark_configured: boolean
+  local_version: string
+  npm_version: string
+  npm_checked_at: number
+  announcements: SitePostItem[]
+  changelog: SitePostItem[]
+  announcement_count: number
+  changelog_count: number
+}
+
+export interface SitefeedRefreshResult {
+  ok: boolean
+  result: {
+    checked_at: number
+    error?: string
+    new_announcements?: string[]
+    new_changelog?: string[]
+    announcement_pushed: boolean
+    changelog_pushed: boolean
+    local_version: string
+    npm_version?: string
+    npm_error?: string
+    cli_pushed: boolean
+  }
 }
 
 // ---- 模型测试 ----

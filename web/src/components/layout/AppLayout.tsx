@@ -1,6 +1,7 @@
 import { useState } from "react"
-import { NavLink, Outlet, Navigate, useNavigate } from "react-router-dom"
+import { NavLink, Outlet, Navigate, useNavigate, Link } from "react-router-dom"
 import { useAuth } from "@/hooks/use-auth"
+import { useSitefeedSummary } from "@/hooks/use-sitefeed-summary"
 import { useDashboardTheme } from "@/components/theme/theme-context"
 import { PageLoading } from "@/components/shared/PageLoading"
 import { LogoMark } from "@/components/shared/LogoMark"
@@ -19,6 +20,7 @@ import {
   Menu,
   X,
   CalendarCheck,
+  Megaphone,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -44,6 +46,29 @@ export default function AppLayout() {
   const { isAuthenticated, isLoading, logout } = useAuth()
   const navigate = useNavigate()
   const { mode, setMode, options } = useDashboardTheme()
+  const { summary } = useSitefeedSummary()
+
+  // npm 最新版本落后于本地适配版本 → 高亮提示同步指纹
+  const verBehind = (() => {
+    if (!summary?.npm_version) return false
+    const gt = (a: string, b: string) => {
+      const as = a.replace(/^v/, "").split(".")
+      const bs = b.replace(/^v/, "").split(".")
+      for (let i = 0; i < as.length || i < bs.length; i++) {
+        const an = Number.parseInt(as[i] ?? "", 10)
+        const bn = Number.parseInt(bs[i] ?? "", 10)
+        if (Number.isNaN(an) || Number.isNaN(bn)) return (as[i] ?? "") > (bs[i] ?? "")
+        if (an !== bn) return an > bn
+      }
+      return false
+    }
+    return gt(summary.npm_version, summary.local_version)
+  })()
+  const newAnnouncements = summary
+    ? summary.announcements.filter(
+        (a) => Date.now() - a.first_seen_at * 1000 < 30 * 24 * 3600 * 1000,
+      ).length
+    : 0
 
   if (isLoading) return <PageLoading />
   if (!isAuthenticated) return <Navigate to="/admin/login" replace />
@@ -80,6 +105,42 @@ export default function AppLayout() {
           {label}
         </NavLink>
       ))}
+
+      {/* 官网动态：侧边栏左下角双入口（公告 / 更新记录，叠放） */}
+      <div className="mt-auto flex flex-col gap-1 border-t pt-3 pb-2">
+        <Link
+          to="/admin/sitefeed/announcements"
+          onClick={() => setMobileNavOpen(false)}
+          className="flex items-center gap-3 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Megaphone className="h-3.5 w-3.5" />
+          官网公告
+          {newAnnouncements > 0 && (
+            <span className="ml-auto rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold text-primary">
+              {newAnnouncements}
+            </span>
+          )}
+        </Link>
+        <Link
+          to="/admin/sitefeed/changelog"
+          onClick={() => setMobileNavOpen(false)}
+          className="flex items-center gap-3 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ScrollText className="h-3.5 w-3.5" />
+          更新记录
+          <span
+            className={cn(
+              "ml-auto font-mono text-[10px]",
+              verBehind
+                ? "font-semibold text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground/70",
+            )}
+          >
+            {summary?.local_version ?? "—"}
+            {summary?.npm_version && verBehind ? ` → ${summary.npm_version}` : ""}
+          </span>
+        </Link>
+      </div>
     </nav>
   )
 

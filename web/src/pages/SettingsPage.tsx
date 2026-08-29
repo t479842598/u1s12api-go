@@ -25,6 +25,8 @@ export default function SettingsPage() {
   const [proxy, setProxy] = useState("")
   const [version, setVersion] = useState("")
   const [profile, setProfile] = useState("auto")
+  const [barkKey, setBarkKey] = useState("")
+  const [checkHours, setCheckHours] = useState("24")
   const [newPassword, setNewPassword] = useState("")
   const [saving, setSaving] = useState(false)
   const [testingProxy, setTestingProxy] = useState(false)
@@ -36,6 +38,8 @@ export default function SettingsPage() {
     setProxy(s.egress_proxy)
     setVersion(s.u1s1_version)
     setProfile(s.fingerprint_profile === "auto" ? "auto" : s.current_profile)
+    setBarkKey(s.bark_key ?? "")
+    setCheckHours(String(s.site_feed_check_hours ?? 24))
   }, [])
 
   useEffect(() => {
@@ -196,6 +200,61 @@ export default function SettingsPage() {
                 <pre key={p.id} className="whitespace-pre-wrap">{`User-Agent: ${p.user_agent}
 X-Stainless-Runtime-Version: ${p.runtime}`}</pre>
               ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 官网动态推送 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">官网动态推送</CardTitle>
+          <CardDescription>
+            定时抓取 u1s1.io 公告与更新记录，新内容经 Bark 推送到手机；CLI 新版本提醒同步 U1S1_VERSION
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="w-28 text-sm text-muted-foreground">Bark Key</span>
+            <Input
+              className="w-96"
+              value={barkKey}
+              onChange={(e) => setBarkKey(e.target.value)}
+              placeholder="https://api.day.app/&lt;key&gt; 中的 key；留空则只入库不推送"
+            />
+            <Button
+              variant="secondary"
+              disabled={saving}
+              onClick={() => save({ bark_key: barkKey.trim() }, "Bark Key 已更新")}
+            >
+              保存
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="w-28 text-sm text-muted-foreground">检查间隔</span>
+            <Input
+              className="w-24"
+              value={checkHours}
+              onChange={(e) => setCheckHours(e.target.value)}
+              placeholder="24"
+            />
+            <span className="text-xs text-muted-foreground">小时</span>
+            <Button
+              variant="secondary"
+              disabled={saving}
+              onClick={() => {
+                const h = Number.parseInt(checkHours, 10)
+                if (Number.isNaN(h) || h <= 0) {
+                  toast.error("检查间隔必须是正整数（小时）")
+                  return
+                }
+                save({ site_feed_check_hours: h }, "检查间隔已更新（下轮生效）")
+              }}
+            >
+              保存
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              0 或留空恢复默认 24；间隔调整在下一轮检查时生效
+            </span>
           </div>
         </CardContent>
       </Card>

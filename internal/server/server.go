@@ -116,6 +116,10 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 
 	// 每日自动签到（有已授权账号时才跑；无账号时空转无害）。
 	go s.checkinAutoLoop()
+
+	// 官网公告/更新记录监听 + Bark 推送 + npm 版本检测
+	//（测试直构 Settings 时 SiteFeedCheckHours 零值 → RunSiteFeedWatcher 内回退默认值）。
+	go RunSiteFeedWatcher(context.Background(), s)
 	return s, nil
 }
 
@@ -218,6 +222,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/api/accounts/{id}/checkin", s.requireAdmin(s.handleCheckinOne))
 	mux.HandleFunc("POST /admin/api/accounts/{id}/quota-refresh", s.requireAdmin(s.handleQuotaRefreshOne))
 	mux.HandleFunc("GET /admin/api/accounts/{id}/credential", s.requireAdmin(s.handleAccountCredential))
+	mux.HandleFunc("GET /admin/api/sitefeed", s.requireAdmin(s.handleGetSiteFeed))
+	mux.HandleFunc("POST /admin/api/sitefeed/refresh", s.requireAdmin(s.handleSiteFeedRefresh))
 	mux.HandleFunc("GET /admin/api/requests", s.requireAdmin(s.handleListRequests))
 	mux.HandleFunc("GET /admin/api/requests/stats", s.requireAdmin(s.handleRequestStats))
 	mux.HandleFunc("DELETE /admin/api/requests", s.requireAdmin(s.handleClearRequests))

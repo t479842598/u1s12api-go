@@ -586,6 +586,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"egress_proxy":          cfg.EgressProxyURL,
 		"fingerprint_profile":   cfg.FingerprintProfile,
 		"u1s1_version":          cfg.U1S1Version,
+		"bark_key":              cfg.BarkKey,
+		"site_feed_check_hours": cfg.SiteFeedCheckHours,
 		"log_level":             cfg.LogLevel,
 		"profiles":              profileSummaries(),
 		"current_profile":       s.fp.Current().ID,
@@ -613,6 +615,8 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		EgressProxy        *string `json:"egress_proxy,omitempty"`
 		FingerprintProfile *string `json:"fingerprint_profile,omitempty"`
 		U1S1Version        *string `json:"u1s1_version,omitempty"`
+		BarkKey            *string `json:"bark_key,omitempty"`
+		SiteFeedCheckHours *int    `json:"site_feed_check_hours,omitempty"`
 		AdminPassword      *string `json:"admin_password,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -658,6 +662,16 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 			v = config.DefaultU1S1Version
 		}
 		patch[config.KeyU1S1Version] = v
+	}
+	if body.BarkKey != nil {
+		patch[config.KeyBarkKey] = strings.TrimSpace(*body.BarkKey)
+	}
+	if body.SiteFeedCheckHours != nil {
+		v := *body.SiteFeedCheckHours
+		if v <= 0 {
+			v = config.DefaultSiteFeedCheckHours
+		}
+		patch[config.KeySiteFeedCheckHours] = strconv.Itoa(v)
 	}
 	if body.AdminPassword != nil && strings.TrimSpace(*body.AdminPassword) != "" {
 		patch[config.KeyAdminPassword] = strings.TrimSpace(*body.AdminPassword)

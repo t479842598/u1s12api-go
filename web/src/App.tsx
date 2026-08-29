@@ -9,6 +9,7 @@ import RequestsPage from "@/pages/RequestsPage"
 import ModelTestPage from "@/pages/ModelTestPage"
 import LogsPage from "@/pages/LogsPage"
 import SettingsPage from "@/pages/SettingsPage"
+import SitefeedPage from "@/pages/SitefeedPage"
 
 function NotFoundPage() {
   return (
@@ -36,6 +37,8 @@ const router = createBrowserRouter([
       { path: "requests", element: <RequestsPage /> },
       { path: "model-test", element: <ModelTestPage /> },
       { path: "logs", element: <LogsPage /> },
+      { path: "sitefeed/announcements", element: <SitefeedPage kind="announcement" /> },
+      { path: "sitefeed/changelog", element: <SitefeedPage kind="changelog" /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

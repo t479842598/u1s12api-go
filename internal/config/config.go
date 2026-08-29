@@ -22,6 +22,8 @@ type Settings struct {
 	EgressProxyURL     string // 出口代理（http/https/socks5），空=直连
 	FingerprintProfile string // 头指纹档案：auto | macos-arm64 | macos-x64 | linux-x64 | linux-arm64 | windows-x64
 	U1S1Version        string // x-u1s1-version 头的值（跟随官方 CLI 版本）
+	BarkKey            string // Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
+	SiteFeedCheckHours int    // 官网公告/更新记录检查间隔（小时）
 	LogLevel           string // debug|info|warn|error
 	LogColor           bool
 	Debug              bool
@@ -30,9 +32,10 @@ type Settings struct {
 }
 
 const (
-	DefaultUpstreamBaseURL = "https://api.u1s1.io/v1"
-	DefaultU1S1Version     = "1.2.3"
-	defaultProfile         = "auto"
+	DefaultUpstreamBaseURL    = "https://api.u1s1.io/v1"
+	DefaultU1S1Version        = "1.2.3"
+	DefaultSiteFeedCheckHours = 24
+	defaultProfile            = "auto"
 )
 
 // Env 键名。
@@ -44,6 +47,8 @@ const (
 	KeyEgressProxy        = "EGRESS_PROXY"
 	KeyFingerprintProfile = "FINGERPRINT_PROFILE"
 	KeyU1S1Version        = "U1S1_VERSION"
+	KeyBarkKey            = "BARK_KEY"
+	KeySiteFeedCheckHours = "SITEFEED_CHECK_HOURS"
 	KeyLogLevel           = "LOG_LEVEL"
 	KeyLogColor           = "LOG_COLOR"
 	KeyDebug              = "DEBUG"
@@ -78,6 +83,8 @@ func Load(projectRoot string) (*Settings, error) {
 		EgressProxyURL:     strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
 		FingerprintProfile: getStr(kv, KeyFingerprintProfile, defaultProfile),
 		U1S1Version:        getStr(kv, KeyU1S1Version, DefaultU1S1Version),
+		BarkKey:            getStr(kv, KeyBarkKey, ""),
+		SiteFeedCheckHours: getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
 		LogLevel:           getStr(kv, KeyLogLevel, "info"),
 		LogColor:           getBool(kv, KeyLogColor, true),
 		Debug:              getBool(kv, KeyDebug, false),
@@ -148,6 +155,8 @@ func Save(projectRoot string, patch map[string]string) (*Settings, error) {
 		EgressProxyURL:     strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
 		FingerprintProfile: getStr(kv, KeyFingerprintProfile, defaultProfile),
 		U1S1Version:        getStr(kv, KeyU1S1Version, DefaultU1S1Version),
+		BarkKey:            getStr(kv, KeyBarkKey, ""),
+		SiteFeedCheckHours: getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
 		LogLevel:           getStr(kv, KeyLogLevel, "info"),
 		LogColor:           getBool(kv, KeyLogColor, true),
 		Debug:              getBool(kv, KeyDebug, false),
@@ -167,6 +176,8 @@ func PatchableFields(s *Settings) map[string]string {
 		KeyEgressProxy:        s.EgressProxyURL,
 		KeyFingerprintProfile: s.FingerprintProfile,
 		KeyU1S1Version:        s.U1S1Version,
+		KeyBarkKey:            s.BarkKey,
+		KeySiteFeedCheckHours: strconv.Itoa(s.SiteFeedCheckHours),
 		KeyLogLevel:           s.LogLevel,
 		KeyLogColor:           boolStr(s.LogColor),
 		KeyDebug:              boolStr(s.Debug),
@@ -209,6 +220,8 @@ func readEnvLines(path string) []string {
 # EGRESS_PROXY=socks5://127.0.0.1:7897
 # FINGERPRINT_PROFILE=auto
 # U1S1_VERSION=1.2.3
+# BARK_KEY=                  ← Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
+# SITEFEED_CHECK_HOURS=24    ← 官网公告/更新记录检查间隔（小时）
 # QUOTA_AUTO_REFRESH=true   ← 北京时间 0 点额度重置后自动刷新全部上游 Key 配额
 `
 		_ = os.WriteFile(path, []byte(defaults), 0o600)

@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.8.0 (2026-08-29)
+
+### 新增
+
+- **官网动态监听（公告 + 更新记录）**：新包 `internal/sitefeed` 定时抓取 u1s1.io 官网公开数据源——公告 `GET /public/announcements?limit=100`（JSON，逆向官网前端 `announcements.js` 确认）与更新记录 `GET /guides/changelog`（静态渲染 HTML，`golang.org/x/net/html` 按 `<h2>` 版本分块解析，块内容 sha256 做去重键以区分重复的 Gateway 标题）；条目 `INSERT OR IGNORE` 落库新表 `site_posts`（首次运行只建快照不推送），任何单源失败不影响另一源
+- **Bark 推送**：新增 `internal/server/bark.go`（POST `https://api.day.app/<key>/`，`group=u1s1`、官网 favicon 图标、点击跳转对应官网页，`Proxy:nil` 禁环境代理，`barkPushFn` 可注入测试）；新公告/新更新记录各合并为一条推送，更新记录含 CLI 版本号条目时附「请同步 U1S1_VERSION」提示；`BARK_KEY` 为空时照常抓取入库仅跳过推送
+- **npm 版本检测**：每轮检查查询 `registry.npmjs.org/u1s1-cli/latest`，与配置的 `U1S1_VERSION` 语义化比较（`versionGreater`），有新版本单独推送一次（同一版本只推一次，去重存 `sitefeed_state`）
+- **管理后台「官网动态」页面**：侧边栏左下角新增「官网公告」「更新记录」两个叠放入口（公告带 30 天内新条目计数徽标；更新记录显示「本地适配版本 → npm 最新版本」，落后时琥珀色高亮）；页面含版本对比、上次/下次检查时间、公告/更新记录列表（30 天内条目标「新」）与「立即检查」按钮
+- **Admin API**：`GET /admin/api/sitefeed`（列表 + 检查状态 + 版本对比）、`POST /admin/api/sitefeed/refresh`（手动立即检查，返回新增条目与推送结果）
+- **配置**：`config` 新增 `BARK_KEY`（空=不推送）与 `SITEFEED_CHECK_HOURS`（默认 24，`<=0` 关闭监听循环——测试直构 Settings 零值天然不启动，对齐 `QUOTA_AUTO_REFRESH` 惯例），进 `PatchableFields` 热更新写回 `.env`，设置页新增「官网动态推送」卡片
+- **webcheckin 会话复用**：登录链路抽成导出方法 `NewSession`（capcat 求解 → 密码登录 → 返回带会话 cookie 的 client），`CheckIn` 内部改用它；`sitefeed` 注册其为公告接口 401 时的登录兜底（当前公开接口用不到，防御性保留）
+
+### 验证
+
+- 本地端到端：启动后自动建快照（公告 5 条、更新记录 62 块）、npm 检测查到 1.2.5（本地适配 1.2.3）；真实 Bark key 测试推送送达（HTTP 200）
+- 新增测试：changelog HTML 解析（含重复 Gateway 块去重键稳定性）、公告 JSON 解析与结构变化报错、npm 版本查询、首次快照不推送/新增合并推送/重复检查去重/CLI 版本单推一次、`versionGreater` 表驱动、store 去重与状态读写
+
+## v0.7.1 (2026-08-29)
+
+### 新增
+
+- **账号额度明细展示**：`accounts` 表新增 `packages_json` 列，保存上游 `/v1/me` 返回的加量包快照（含 `kind`/`remaining`/`daily_tokens`/`total_tokens`/`used_tokens`/`note` 等字段，旧库自动 `ALTER` 补列）；账号列表「剩余额度」列按业务分组展示合计与明细——**固定额度**（payment/admin_grant/new_user）、**每日赠送**（free_first/free_renew）、**邀请额度**（invite）、**签到打卡**（login_checkin/login_checkin_bonus），仅列出剩余 > 0 的分组
+- **手动刷新额度**：新增 `POST /admin/api/accounts/{id}/quota-refresh`（用设备凭证调 `/v1/me` 拉取加量包并入库），操作列新增「刷额度」按钮
+- **概览页「授权账号额度」卡片**：`GET /admin/api/overview` 新增 `account_quota` 字段（来自库内快照，不做实时请求），概览页展示各启用已授权账号的剩余总额与分类明细
+- **0 点自动刷新覆盖账号额度**：`runQuotaAutoRefresh` 刷完 Key 池后顺带刷新全部授权账号的加量包快照（`refreshAllDeviceQuotas`，300ms 限速）；网页打卡成功后也自动刷新快照（含刚领取的 `login_checkin` 包）
+
+### 变更
+
+- **移除手动打卡入口**：删掉「去打卡」（打开官网手动登录）、「复制账号」、「复制密码」三个按钮——打卡已由服务端 capcat 纯 API 求解全自动完成，不再需要人工到官网登录；操作列改为「打卡」（立即触发一次网页打卡）+「刷额度」
+- **列名调整**：「签到剩余」改为「剩余额度」（展示合计 + 分组明细）
+
+### 修复
+
+- **nginx 413 Request Entity Too Large**：`u1s1.tang74.top` 反代配置未设 `client_max_body_size`，沿用 nginx 默认 1MB，大上下文聊天请求（`/v1/chat/completions`）在到达 Go 服务前即被 nginx 拒绝。已补 `client_max_body_size 50m;` 并 reload（服务器配置变更，不涉及代码）
+
 ## v0.7.0 (2026-08-29)
 
 ### 新增

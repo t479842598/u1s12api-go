@@ -21,6 +21,8 @@ import type {
   OneClickStartResult,
   OneClickConfirmResult,
   AccountQuota,
+  SitefeedData,
+  SitefeedRefreshResult,
 } from "@/types"
 
 const API_BASE = "/admin/api"
@@ -155,6 +157,8 @@ export const api = {
     egress_proxy?: string
     fingerprint_profile?: string
     u1s1_version?: string
+    bark_key?: string
+    site_feed_check_hours?: number
     admin_password?: string
   }) =>
     request<{ ok: boolean; fingerprint_profile_applied: string }>("/settings", {
@@ -185,6 +189,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ egress_proxy }),
     }),
+
+  // 官网动态（公告 / 更新记录）
+  sitefeed: () => request<SitefeedData>("/sitefeed"),
+  sitefeedRefresh: () =>
+    request<SitefeedRefreshResult>("/sitefeed/refresh", { method: "POST" }),
 
   // 官网账号（设备授权 + 签到）
   accounts: () => request<AccountsData>("/accounts"),

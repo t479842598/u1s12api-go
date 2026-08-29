@@ -56,21 +56,30 @@ type Result struct {
 	Note          string `json:"note"`
 }
 
-// CheckIn 完成一次网页打卡：capcat 求解 → 登录 → 再求解 → claim。
-func (s *Service) CheckIn(ctx context.Context, email, password string) (*Result, error) {
+// NewSession 完成一次网页登录：capcat 求解 → POST /auth/password/login，
+// 返回携带会话 cookie 的 client（供后续带会话请求复用，如打卡 claim、官网 API 抓取）。
+func (s *Service) NewSession(ctx context.Context, email, password string) (*http.Client, error) {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Transport: s.transport, Jar: jar, Timeout: 90 * time.Second}
 
-	// 1+2. capcat 求解 → 登录
 	capToken, err := s.cap.Solve(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("网页签到: capcat 求解失败: %w", err)
+		return nil, fmt.Errorf("网页登录: capcat 求解失败: %w", err)
 	}
 	if err := s.login(ctx, client, email, password, capToken); err != nil {
-		return nil, fmt.Errorf("网页签到: 登录失败: %w", err)
+		return nil, fmt.Errorf("网页登录: 登录失败: %w", err)
+	}
+	return client, nil
+}
+
+// CheckIn 完成一次网页打卡：登录拿会话 → 再求解 → claim。
+func (s *Service) CheckIn(ctx context.Context, email, password string) (*Result, error) {
+	client, err := s.NewSession(ctx, email, password)
+	if err != nil {
+		return nil, fmt.Errorf("网页签到: %w", err)
 	}
 
-	// 3+4. 新 cap-token → claim
+	// claim 前需新 cap-token（登录已消费第一个）
 	capToken2, err := s.cap.Solve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("网页签到: claim 前 capcat 求解失败: %w", err)
