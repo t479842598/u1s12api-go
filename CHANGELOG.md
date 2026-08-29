@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.1 (2026-08-29)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.2.5**：`U1S1_VERSION` 默认值 1.2.3 → 1.2.5（README、.env.example、config 模板、设置页 placeholder 同步更新）。逆向核对 1.2.4/1.2.5（npm pack 三版本 dist diff + 本地 mock 抓包验证）：指纹相关文件 `device-auth.js`/`config.js`/`login.js`/`model.js` 与 package.json 依赖（pi-coding-agent 0.84.3 → openai 6.40.0）**零变化**，UA / X-Stainless-* / x-u1s1-client / x-u1s1-platform 头完全一致，仅 `x-u1s1-version` 随 package.json 变为 1.2.5；1.2.4/1.2.5 新增的是纯客户端功能（`u1s1 deploy`、bench 评测模块、searchWeb 参数重构），网关协议无变化。实抓 1.2.5 请求头确认：普通 key 走 `Authorization: Bearer`，设备凭证走 `Authorization: DPoP` + `dpop` 签名，与本项目两通道实现一致
+
 ## v0.8.0 (2026-08-29)
 
 ### 新增
