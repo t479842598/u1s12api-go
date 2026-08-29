@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { api, ApiClientError } from "@/lib/api-client"
-import type { OverviewData, RequestStats, StatsRange } from "@/types"
+import type { OverviewData, RequestStats, StatsRange, AccountQuotaSummary } from "@/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,7 +12,7 @@ import {
 import { PageLoading } from "@/components/shared/PageLoading"
 import {
   Activity, ArrowRight, BarChart3, Coins, FileText, KeyRound,
-  Plus, Terminal, Zap,
+  Plus, RefreshCw, Terminal, Zap,
 } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -23,6 +23,11 @@ function fmtTokens(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
   return String(n)
+}
+
+function fmtTime(unix: number): string {
+  if (!unix) return "—"
+  return new Date(unix * 1000).toLocaleTimeString("zh-CN")
 }
 
 // ---- 子组件 ----
@@ -131,11 +136,33 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [statsLoading, setStatsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // 账号额度（概览快照 + 实时刷新结果），quotaList 展示用。
+  const [quotaList, setQuotaList] = useState<AccountQuotaSummary[] | null>(null)
+  const [quotaRefreshing, setQuotaRefreshing] = useState(false)
+
+  // 实时刷新全部授权账号额度（/v1/me），成功后更新列表。
+  const refreshAllQuota = useCallback(async () => {
+    setQuotaRefreshing(true)
+    try {
+      const d = await api.accountQuotaRefreshAll()
+      setQuotaList(d.accounts)
+      setError(null)
+    } catch (err) {
+      // 刷新失败不打断页面，保留旧数据。
+    } finally {
+      setQuotaRefreshing(false)
+    }
+  }, [])
 
   const loadOverview = useCallback(async () => {
     try {
       const d = await api.overview()
       setOverview(d)
+      setQuotaList((prev) => {
+        // 概览轮询带来新快照时，若列表尚未初始化则采用；否则保留实时刷新结果。
+        if (prev === null) return d.account_quota ?? []
+        return prev
+      })
       setError(null)
     } catch (err) {
       if (err instanceof ApiClientError && err.status === 401) return
@@ -157,8 +184,11 @@ export default function DashboardPage() {
     loadOverview()
     loadStats()
     const t = setInterval(loadOverview, 15000)
-    return () => clearInterval(t)
-  }, [loadOverview, loadStats])
+    // 账号额度每 3 分钟实时刷新一次（/v1/me 拉最新剩余）。
+    refreshAllQuota()
+    const tq = setInterval(refreshAllQuota, 3 * 60 * 1000)
+    return () => { clearInterval(t); clearInterval(tq) }
+  }, [loadOverview, loadStats, refreshAllQuota])
 
   if (loading && !overview) return <PageLoading />
 
@@ -171,6 +201,11 @@ export default function DashboardPage() {
   const recent = o?.recent ?? []
   const fp = o?.fingerprint ?? { profile: "", label: "", user_agent: "", runtime: "" }
   const maxDay = Math.max(1, ...daily.map((d) => d.requests))
+  // 账号额度列表（概览快照初始化，实时刷新后替换）+ 更新时间。
+  const quotaAccounts = quotaList ?? []
+  const quotaUpdatedAt = quotaAccounts.length
+    ? Math.max(...quotaAccounts.map((q) => q.updated_at || 0))
+    : 0
 
   // 统计条
   const statsTotal = s?.total ?? 0
@@ -205,48 +240,58 @@ export default function DashboardPage() {
           detail={`累计 $${totals.cost_usd.toFixed(4)}`} loading={loading} />
       </div>
 
-      {/* 账号额度汇总 */}
-      {o?.account_quota && o.account_quota.length > 0 && (
+      {/* 账号额度汇总：每个账号一条总可用额度进度条，实时刷新 */}
+      {quotaAccounts.length > 0 && (
         <Card className="border-border/60">
           <CardHeader className="pb-1">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium">
-              <Coins className="size-4 text-primary" />授权账号额度
-              <span className="text-[10px] font-normal text-muted-foreground">各账号加量包剩余总额（自动打卡后刷新）</span>
-            </CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <Coins className="size-4 text-primary" />授权账号额度
+                <span className="text-[10px] font-normal text-muted-foreground">
+                  {quotaRefreshing ? "正在实时刷新…" : `更新于 ${fmtTime(quotaUpdatedAt)}`}
+                </span>
+              </CardTitle>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={refreshAllQuota} disabled={quotaRefreshing}>
+                <RefreshCw className={`mr-1 size-3 ${quotaRefreshing ? "animate-spin" : ""}`} />
+                刷新额度
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-border/60">
-                    <th className="py-1.5 pr-3 text-left font-medium text-muted-foreground">账号</th>
-                    <th className="py-1.5 pr-3 text-right font-medium text-muted-foreground">剩余总额</th>
-                    <th className="py-1.5 text-left font-medium text-muted-foreground">明细</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {o.account_quota.map((q) => (
-                    <tr key={q.id} className="border-b border-border/40 last:border-0">
-                      <td className="whitespace-nowrap py-1.5 pr-3">{q.email_masked}</td>
-                      <td className="py-1.5 pr-3 text-right font-medium">{fmtTokens(q.total)}</td>
-                      <td className="py-1.5">
-                        {q.items.length === 0 ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-x-3 gap-y-1">
-                            {q.items.map((it) => (
-                              <span key={it.key} className="whitespace-nowrap text-muted-foreground">
-                                {it.label} {fmtTokens(it.remaining)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {quotaRefreshing && quotaAccounts.length === 0 ? (
+              <div className="space-y-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {quotaAccounts.map((q) => {
+                  const pct = q.capacity > 0 ? Math.min(100, Math.round((q.total / q.capacity) * 100)) : 0
+                  const barColor = pct > 50 ? "bg-emerald-500" : pct > 20 ? "bg-amber-500" : "bg-red-500"
+                  return (
+                    <div key={q.id}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-medium">{q.email_masked}</span>
+                        <span className="text-muted-foreground">
+                          可用 <span className="font-medium text-foreground">{fmtTokens(q.total)}</span>
+                          {q.capacity > 0 && <> / {fmtTokens(q.capacity)}（{pct}%）</>}
+                        </span>
+                      </div>
+                      <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
+                        <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
+                      </div>
+                      {q.items.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                          {q.items.map((it) => (
+                            <span key={it.key} className="whitespace-nowrap">
+                              {it.label} {fmtTokens(it.remaining)}
+                              {it.total > 0 && <span className="opacity-60"> / {fmtTokens(it.total)}</span>}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

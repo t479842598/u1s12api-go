@@ -59,6 +59,34 @@ func (s *Server) handleQuotaRefreshOne(w http.ResponseWriter, r *http.Request) {
 	writeAPIData(w, http.StatusOK, map[string]any{"ok": true, "login_checkin_remaining": remaining, "quota": buildAccountQuotaView(acc)})
 }
 
+// handleQuotaRefreshAll 实时刷新全部授权账号额度（/v1/me），返回最新汇总（供概览页进度条）。
+func (s *Server) handleQuotaRefreshAll(w http.ResponseWriter, r *http.Request) {
+	okCount, failCount := s.refreshAllDeviceQuotas()
+	accounts, err := s.store.ListAuthorizedEnabledAccounts()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	summaries := make([]map[string]any, 0, len(accounts))
+	for _, a := range accounts {
+		view := buildAccountQuotaView(a)
+		summaries = append(summaries, map[string]any{
+			"id":          a.ID,
+			"email_masked": a.EmailMasked,
+			"total":       view.Total,
+			"capacity":    view.Capacity,
+			"updated_at":  view.UpdatedAt,
+			"items":       view.Items,
+		})
+	}
+	writeAPIData(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"refreshed": okCount,
+		"failed":    failCount,
+		"accounts":  summaries,
+	})
+}
+
 // handleAddAccount 新增账号（email + password）。
 func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	var body struct {

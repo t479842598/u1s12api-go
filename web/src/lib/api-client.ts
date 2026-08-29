@@ -21,6 +21,7 @@ import type {
   OneClickStartResult,
   OneClickConfirmResult,
   AccountQuota,
+  AccountQuotaSummary,
   SitefeedData,
   SitefeedRefreshResult,
 } from "@/types"
@@ -229,4 +230,9 @@ export const api = {
     ),
   accountQuotaRefresh: (id: number) =>
     request<{ ok: boolean; quota: AccountQuota }>(`/accounts/${id}/quota-refresh`, { method: "POST" }),
+  accountQuotaRefreshAll: () =>
+    request<{ ok: boolean; refreshed: number; failed: number; accounts: AccountQuotaSummary[] }>(
+      "/accounts/quota-refresh-all",
+      { method: "POST" },
+    ),
 }

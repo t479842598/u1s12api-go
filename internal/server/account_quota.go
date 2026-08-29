@@ -12,16 +12,18 @@ import (
 
 // ---- 账号额度视图（管理页/概览展示用） ----
 
-// accountQuotaItem 单个额度分组的剩余。
+// accountQuotaItem 单个额度分组的剩余与容量。
 type accountQuotaItem struct {
 	Key       string `json:"key"`
 	Label     string `json:"label"`
 	Remaining int64  `json:"remaining"`
+	Total     int64  `json:"total"` // 容量（进度条分母，daily_tokens/total_tokens，未知取剩余）
 }
 
-// accountQuotaView 账号加量包分组视图：总额 + 各分组剩余。
+// accountQuotaView 账号加量包分组视图：总剩余 + 总容量（进度条）+ 各分组明细。
 type accountQuotaView struct {
-	Total     int64              `json:"total"`
+	Total     int64              `json:"total"`     // 剩余合计
+	Capacity  int64              `json:"capacity"`  // 容量合计（进度条分母）
 	UpdatedAt int64              `json:"updated_at"`
 	Items     []accountQuotaItem `json:"items"`
 }
@@ -56,7 +58,19 @@ func quotaGroupLabel(key string) string {
 	return "其他"
 }
 
-// buildAccountQuotaView 从账号加量包快照构建分组视图（只保留剩余 > 0 的分组；总额为全部包剩余合计）。
+// packageCapacity 单个加量包的容量（进度条分母）：优先每日额度，其次总包额度，兜底剩余。
+func packageCapacity(p store.AccountPackage) int64 {
+	if p.DailyTokens != nil && *p.DailyTokens > 0 {
+		return *p.DailyTokens
+	}
+	if p.TotalTokens != nil && *p.TotalTokens > 0 {
+		return *p.TotalTokens
+	}
+	return p.Remaining
+}
+
+// buildAccountQuotaView 从账号加量包快照构建分组视图（含容量，供进度条展示）。
+// 分组含剩余 > 0 的包；组容量为其全部包的容量合计，剩余为剩余合计。
 func buildAccountQuotaView(acc *store.Account) accountQuotaView {
 	view := accountQuotaView{UpdatedAt: acc.UpdatedAt, Items: []accountQuotaItem{}}
 	if acc.PackagesJSON == "" {
@@ -67,23 +81,28 @@ func buildAccountQuotaView(acc *store.Account) accountQuotaView {
 		return view
 	}
 	groupRem := map[string]int64{}
-	total := int64(0)
+	groupCap := map[string]int64{}
+	totalRem, totalCap := int64(0), int64(0)
 	for _, p := range pkgs {
 		if p.Remaining <= 0 {
 			continue
 		}
 		key := quotaGroupKey(p.Kind)
+		cap := packageCapacity(p)
 		groupRem[key] += p.Remaining
-		total += p.Remaining
+		groupCap[key] += cap
+		totalRem += p.Remaining
+		totalCap += cap
 	}
-	view.Total = total
+	view.Total = totalRem
+	view.Capacity = totalCap
 	for _, g := range quotaGroupMeta {
 		if r, ok := groupRem[g.key]; ok && r > 0 {
-			view.Items = append(view.Items, accountQuotaItem{Key: g.key, Label: g.label, Remaining: r})
+			view.Items = append(view.Items, accountQuotaItem{Key: g.key, Label: g.label, Remaining: r, Total: groupCap[g.key]})
 		}
 	}
 	if r, ok := groupRem["other"]; ok && r > 0 {
-		view.Items = append(view.Items, accountQuotaItem{Key: "other", Label: "其他", Remaining: r})
+		view.Items = append(view.Items, accountQuotaItem{Key: "other", Label: "其他", Remaining: r, Total: groupCap["other"]})
 	}
 	return view
 }

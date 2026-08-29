@@ -128,6 +128,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
 			"id":          a.ID,
 			"email_masked": a.EmailMasked,
 			"total":       view.Total,
+			"capacity":    view.Capacity,
 			"updated_at":  view.UpdatedAt,
 			"items":       view.Items,
 		})

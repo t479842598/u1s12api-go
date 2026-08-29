@@ -306,10 +306,12 @@ export interface QuotaItem {
   key: string
   label: string
   remaining: number
+  total: number
 }
 
 export interface AccountQuota {
   total: number
+  capacity: number
   updated_at: number
   items: QuotaItem[]
 }
@@ -318,6 +320,7 @@ export interface AccountQuotaSummary {
   id: number
   email_masked: string
   total: number
+  capacity: number
   updated_at: number
   items: QuotaItem[]
 }
