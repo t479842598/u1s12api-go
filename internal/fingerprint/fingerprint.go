@@ -21,6 +21,8 @@
 //	dpop: <header.payload.sig>   （每请求新签，见 upstream/device.go）
 //	x-u1s1-client: terminal|web|desktop|cloud
 //	x-u1s1-platform: {os.platform()}-{os.arch()}   例: darwin-arm64
+//	x-u1s1-attestation: <token>  （1.3.0 新增：网关经 /v1/models 签发的客户端证明，
+//	                              绑定 user+device、7 天有效，无法自造，见 upstream/attestation.go）
 //
 // 注意：x-u1s1-client / x-u1s1-platform / DPoP 仅设备凭证模式使用，普通 u1s1- key
 // 通道不发这三个头（官方 authorizedFetch 的 api_key 兜底分支只发 Bearer + x-u1s1-version）。

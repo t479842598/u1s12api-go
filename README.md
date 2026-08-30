@@ -5,10 +5,11 @@
 ## 特性
 
 - **OpenAI 兼容**：`GET /v1/models`、`POST /v1/chat/completions`（流式 / 非流式）
-- **请求头指纹模拟**：与官方 u1s1-cli 1.2.5 完全一致（UA + X-Stainless-* + x-u1s1-version + x-u1s1-client + x-u1s1-platform）
+- **请求头指纹模拟**：与官方 u1s1-cli 1.3.0 完全一致（UA + X-Stainless-* + x-u1s1-version + x-u1s1-client + x-u1s1-platform + x-u1s1-attestation）
 - **官网账号 + 设备授权**：后台录入官网账号（邮箱+密码），发起设备授权领回 `u1s1d-` 设备凭证（DPoP 签名），网关即被识别为官方客户端，消耗「仅限 u1s1 客户端使用」的加量包
 - **每日自动签到**：每天北京时间 0 点后用设备凭证调 `/v1/me` 自动领取每日打卡 200 万 Token 加量包
 - **设备凭证优先转发**：有已授权账号时聊天转发优先走设备凭证通道（消耗客户端量包），失败回退 `u1s1-` Key 池
+- **客户端证明（attestation）**：自动从 `/v1/models` 领取网关签发的 `x-u1s1-attestation` 令牌并按设备缓存（绑定 user+device、7 天有效、临期自动重签），与官方 1.3.0 客户端行为对齐；取不到时自动降级为不带该头，不阻断请求
 - **多 Key 池**：轮询调度，单 Key 额度耗尽自动冷却至次日北京时间 0 点，401 自动禁用
 - **配额查询**：一键查看每把 Key 的今日剩余额度 / 永久余额（调用上游 `/v1/me`）
 - **配额自动刷新**：每天北京时间 0 点额度重置后自动全量刷新全部上游 Key 配额（`QUOTA_AUTO_REFRESH`，默认开启）
@@ -40,7 +41,7 @@ open http://127.0.0.1:8080/admin/
 | `UPSTREAM_BASE_URL` | `https://api.u1s1.io/v1` | 上游网关 |
 | `EGRESS_PROXY_URL` | 空（直连） | 出口代理 `http://`/`socks5://` |
 | `FINGERPRINT_PROFILE` | `auto` | 头指纹档案 |
-| `U1S1_VERSION` | `1.2.5` | x-u1s1-version 头 |
+| `U1S1_VERSION` | `1.3.0` | x-u1s1-version 头 |
 | `LOG_LEVEL` | `info` | 日志级别 |
 | `QUOTA_AUTO_REFRESH` | `true` | 北京时间 0 点后自动全量刷新上游 Key 配额 |
 

@@ -60,6 +60,8 @@ type Server struct {
 	// 避免并发请求反复打同一台已耗尽的账号（先用最少额度，耗尽切到最多额度）。
 	deviceQuotaExhaustedMu sync.Mutex
 	deviceQuotaExhausted   map[int64]time.Time
+	// attest 缓存网关签发的 x-u1s1-attestation 令牌（u1s1-cli 1.3.0 新增头，按设备凭证分别持有）。
+	attest *upstream.AttestationManager
 }
 
 type atomicValue struct {
@@ -91,6 +93,9 @@ func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerp
 		deviceQuotaExhausted: map[int64]time.Time{},
 	}
 	s.cfg.Store(cfg)
+
+	// 设备凭证通道的客户端证明令牌缓存（依赖 deviceClient，故在结构体组装后注入）。
+	s.attest = upstream.NewAttestationManager(s.deviceClient)
 
 	secret, err := loadOrCreateSecret(filepath.Join(projectRoot, "data", "admin_cookie_secret"))
 	if err != nil {

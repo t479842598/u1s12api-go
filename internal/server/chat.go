@@ -272,11 +272,18 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 			logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, cerr)
 			continue
 		}
-		resp, derr := dc.DeviceChat(r.Context(), cred, forwardBody)
+		// v1.3.0：官方签名代理会向设备凭证请求注入网关签发的 x-u1s1-attestation。
+		// 取不到令牌时返回空串、照常发请求（降级不阻断）。
+		att := s.attest.Token(r.Context(), cred)
+		resp, derr := dc.DeviceChat(r.Context(), cred, forwardBody, att)
 		if derr != nil {
 			var apiErr *upstream.APIError
 			if asAPIError(derr, &apiErr) {
 				logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
+				// 401/403 可能是令牌被网关判无效（撤销/换设备/过期），丢缓存，下次重新签发。
+				if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+					s.attest.Invalidate(cred)
+				}
 				s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
 				if upstream.QuotaSignal(apiErr.StatusCode, apiErr.Body) {
 					// 当日额度耗尽：标记该设备冷却，切到下一个有额度的账号。

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.9.0 (2026-08-30)
+
+### 新增
+
+- **设备凭证通道接入 `x-u1s1-attestation` 客户端证明**（官方 u1s1-cli 1.3.0 新增请求头）：新包文件 `internal/upstream/attestation.go` 提供 `AttestationManager`，在发 chat 前用设备凭证调 `GET /v1/models` 领取网关签发的 `client_attestation.token`，按设备凭证缓存并注入 `x-u1s1-attestation` 头，与官方签名代理行为对齐。令牌**绑定 user + device_id、无法伪造或跳账号复用**，因此必须逐账号获取；`DeviceChat` 新增 attestation 参数，`DeviceModels` 为新增的签发入口
+- **令牌生命周期自治**：距过期不足 6 小时自动重签（真实 TTL 7 天，相当于每天最多重签一次）；per-key 锁 + 双检合并并发请求，同一账号不会每请求多打一次 `/v1/models`；上游返回 401/403 时 `Invalidate` 丢缓存、下次重签
+- **降级不阻断**：签发失败（网络抖动、老网关无该字段）时返回空串并照常发请求（不带该头）——与官方无令牌时的行为一致；已有旧令牌时失败则继续复用旧值；网关不签发时缓存空值 1 小时避免重复探测
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.3.0**：`U1S1_VERSION` 默认值 1.2.5 → 1.3.0（`internal/config`、`.env.example`、config 模板、README、设置页 placeholder、服务器 `.env` 同步）。逆向核对 1.2.6→1.3.0 五个版本（npm pack 逐文件 diff + 本地 mock 抓包 + 真实网关探针）：UA / X-Stainless-* / DPoP 签名实现**零变化**（openai SDK 仍 6.40.0，pi-coding-agent 1.2.9 起 0.84.3→0.84.4 但 `pi-ai` 依赖的 openai 版本未变），变化集中在 `x-u1s1-version` 与新头 attestation。官方注释明确“不带版本头的旧版会在会话首轮被追加升级提示”，因此版本值需及时跟进
+
+### 验证
+
+- 新增 `internal/upstream/attestation_test.go`（11 项：缓存命中只签发一次、16 并发合并为 1 次签发、临期重签、失败降级、失败复用旧值、老网关空值负缓存、Invalidate 重签、多设备隔离、nil 安全、超长令牌丢弃）与 `internal/server/attestation_test.go`（4 项端到端：设备通道实发该头、3 次请求只签发 1 次、Key 池通道不发、老网关下照常成功）；`go test -race ./...` 全绿
+- 真实网关实测（自有账号，只读）：`/v1/models` 确实返回 `client_attestation{token(150 字符), expires_in:604800}`；payload 解码为 `{"v":1,"u":531,"d":655,"exp":…,"n":…}` 且 `d` 等于 `accounts.device_id`；连续两次调用 token 不同（每次重签）；普通 `u1s1-` key 实测 NOT ISSUED
+
+### 已知未验证
+
+- **网关是否已强制校验该头未能证实**：四个生产账号今日额度均已耗尽，带/不带/伪造三种 attestation 的 chat 请求均返回同一个 `429 quota_exceeded`（额度检查先于证明校验，或该头尚处于只签发不校验的灰度阶段），无法区分。本次实现按“官方发则我发”对齐，无论后续是否强校验都不需再改
+
 ## v0.8.3 (2026-08-29)
 
 ### 新增

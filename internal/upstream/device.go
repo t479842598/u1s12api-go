@@ -431,9 +431,107 @@ func (c *DeviceClient) DeviceMe(ctx context.Context, account *DeviceCredential) 
 	return out, nil
 }
 
+// DeviceModelsResult GET /v1/models（设备凭证）中与客户端证明相关的字段。
+type DeviceModelsResult struct {
+	// Attestation 网关签发的 x-u1s1-attestation 令牌（v1.3.0 新增）。
+	// 官方客户端从该响应体 client_attestation.token 取值，注入签名代理转发的每个请求。
+	Attestation string
+	// ExpiresAt 令牌过期时刻（由 expires_in / 令牌 payload 的 exp 推出）。
+	ExpiresAt time.Time
+	// ModelCount 模型数量（仅用于日志与自检）。
+	ModelCount int
+}
+
+// maxAttestationTokenLen 官方 fetchModels 的上限：token 长度 >1024 视为异常丢弃。
+const maxAttestationTokenLen = 1024
+
+// DeviceModels 用设备凭证调 GET /v1/models，取回网关签发的客户端证明令牌。
+//
+// 与官方 fetchModels 一致：只带 authorization(DPoP) + x-u1s1-version，不带 UA / X-Stainless-*。
+// 令牌是**按设备签发**的（payload 含 u=user id、d=device_id），无法伪造或跨账号复用，
+// 且每次调用都会重新签发（nonce/exp 变化），因此必须按账号分别获取并缓存。
+func (c *DeviceClient) DeviceModels(ctx context.Context, account *DeviceCredential) (*DeviceModelsResult, error) {
+	u := c.baseURL + "/models"
+	headers, err := dpopHeaders(account.DeviceToken, account.PublicJWK, account.PrivateJWK, http.MethodGet, u)
+	if err != nil {
+		return nil, err
+	}
+	headers["x-u1s1-version"] = c.clientVersion()
+	resp, err := c.doDevice(ctx, http.MethodGet, "/models", headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	var raw struct {
+		Data []json.RawMessage `json:"data"`
+		// client_attestation 可能是对象或缺失（老网关）。
+		ClientAttestation *struct {
+			Token     string `json:"token"`
+			ExpiresIn int64  `json:"expires_in"`
+		} `json:"client_attestation"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("解析 /v1/models 响应失败: %w", err)
+	}
+	out := &DeviceModelsResult{ModelCount: len(raw.Data)}
+	if raw.ClientAttestation == nil {
+		return out, nil
+	}
+	tok := raw.ClientAttestation.Token
+	if tok == "" || len(tok) > maxAttestationTokenLen {
+		return out, nil
+	}
+	out.Attestation = tok
+	out.ExpiresAt = attestationExpiry(tok, raw.ClientAttestation.ExpiresIn)
+	return out, nil
+}
+
+// attestationExpiry 推算令牌过期时刻：优先用令牌 payload 里的 exp（权威，与网关同时钟），
+// 其次用响应体的 expires_in，最后保守回退 1 小时。
+func attestationExpiry(token string, expiresInSeconds int64) time.Time {
+	if payload, ok := decodeAttestationPayload(token); ok && payload.Exp > 0 {
+		return time.Unix(payload.Exp, 0)
+	}
+	if expiresInSeconds > 0 {
+		return time.Now().Add(time.Duration(expiresInSeconds) * time.Second)
+	}
+	return time.Now().Add(time.Hour)
+}
+
+// AttestationPayload 令牌 payload（base64url(JSON)）里已知的字段。
+type AttestationPayload struct {
+	V   int    `json:"v"`   // 版本号
+	U   int64  `json:"u"`   // user id
+	D   int64  `json:"d"`   // device_id（与 accounts.device_id 对应）
+	Exp int64  `json:"exp"` // 过期 unix 秒
+	N   string `json:"n"`   // 随机 nonce
+}
+
+// decodeAttestationPayload 解析 `<base64url(json)>.<base64url(sig)>` 的 payload 部分。
+func decodeAttestationPayload(token string) (*AttestationPayload, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return nil, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, false
+	}
+	var p AttestationPayload
+	if json.Unmarshal(raw, &p) != nil {
+		return nil, false
+	}
+	return &p, true
+}
+
 // DeviceChat 用设备凭证调 POST /v1/chat/completions（消耗「仅限客户端」加量包）。
+// attestation 为网关签发的 x-u1s1-attestation 令牌，空串则不发该头（v1.3.0 前的行为）。
 // 成功返回原始响应（流式 SSE 或 JSON），调用方负责 Close；失败返回 *APIError。
-func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential, body []byte) (*http.Response, error) {
+func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential, body []byte, attestation string) (*http.Response, error) {
 	u := c.baseURL + "/chat/completions"
 	dp, err := dpopHeaders(account.DeviceToken, account.PublicJWK, account.PrivateJWK, http.MethodPost, u)
 	if err != nil {
@@ -456,6 +554,10 @@ func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential
 	headers["X-Stainless-Runtime"] = "node"
 	headers["X-Stainless-Runtime-Version"] = p.RuntimeVersion
 	headers["X-Stainless-Retry-Count"] = "0"
+	// v1.3.0 新增：网关签发的客户端证明。官方签名代理仅在拿到令牌时注入，缺失即不发。
+	if attestation != "" {
+		headers["x-u1s1-attestation"] = attestation
+	}
 	resp, err := c.doDevice(ctx, http.MethodPost, "/chat/completions", headers, body)
 	if err != nil {
 		return nil, err
