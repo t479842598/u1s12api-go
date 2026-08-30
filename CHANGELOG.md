@@ -16,6 +16,8 @@
 
 - 新增 `internal/upstream/attestation_test.go`（11 项：缓存命中只签发一次、16 并发合并为 1 次签发、临期重签、失败降级、失败复用旧值、老网关空值负缓存、Invalidate 重签、多设备隔离、nil 安全、超长令牌丢弃）与 `internal/server/attestation_test.go`（4 项端到端：设备通道实发该头、3 次请求只签发 1 次、Key 池通道不发、老网关下照常成功）；`go test -race ./...` 全绿
 - 真实网关实测（自有账号，只读）：`/v1/models` 确实返回 `client_attestation{token(150 字符), expires_in:604800}`；payload 解码为 `{"v":1,"u":531,"d":655,"exp":…,"n":…}` 且 `d` 等于 `accounts.device_id`；连续两次调用 token 不同（每次重签）；普通 `u1s1-` key 实测 NOT ISSUED
+- **新增可复用的真实网关集成检查** `internal/upstream/real_gateway_test.go`（`TestRealGatewayAttestation`）：默认 skip，凭证走环境变量（`U1S1_DEV_TOKEN`/`U1S1_DEV_PRIV`/`U1S1_DEV_PUB`，不落仓库），校验令牌能签发、payload 带 user/device 绑定、TTL 约 7 天、事二次命中缓存；额外设 `U1S1_REAL_CHAT=1` 才发一次真实 chat（确认不被网关以指纹/证明理由拒绝）。以后每次版本同步可直接跑它，不必重写探针
+- 部署后真实环境验证：欧洲 VPS 跑 v0.9.0 发一次 chat，4 个设备账号均成功签发令牌（日志无签发失败告警）、回退链路不变；本地用本项目代码跑 `TestRealGatewayAttestation` 得到令牌 len=150 / TTL 168h / 缓存命中 1µs / chat 返回 429 额度而非 401
 
 ### 已知未验证
 
