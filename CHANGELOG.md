@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.9.1 (2026-08-31)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.3.1**：`U1S1_VERSION` 默认值 1.3.0 → 1.3.1（`internal/config` 默认值、config 模板、`.env.example`、README、设置页 placeholder、服务器 `.env` 同步）
+- **透传上游 `Retry-After`**：`APIError` 新增 `RetryAfter` 字段（`Chat` 与 `DeviceChat` 均捕获），`passthroughUpstreamError` 在错误响应中保留该头。Gateway 新增可重试的 `503 model_unavailable` 并下发 `Retry-After`，不透传则客户端失去退避依据、只能盲重试
+
+### 逆向核对（1.3.0 → 1.3.1）
+
+`npm pack` 两版本 tarball 逐文件 diff + 本地 mock 抓包对比实际出站头。结论：**1.3.1 是纯客户端健壮性版本，线上契约零变化**
+
+- 改动面 21 个文件，但 `device-auth.js` 的新增仅为**本地签名代理加固**：请求体 32MB 上限（`readSigningProxyRequestBody`）、客户端断开后立即 `AbortController` 取消上游；`api.js` 的新增仅为**响应读取上限与 schema 校验**（8MB/64KB 上限、`signalWithTimeout`）
+- 签名代理注入的四个头（`x-u1s1-client` / `x-u1s1-version` / `x-u1s1-platform` / `x-u1s1-attestation`）在 diff 里仅以**重新缩进**形式出现（被包进新的 try 块），内容逐字未变
+- `dpopHeaders` / `authorizedFetch` / `requestHeaders` / `clientSurface` 四个函数体 **md5 完全一致**（DPoP 签名与鉴权链路未动）
+- 依赖零变化（pi-coding-agent / pi-tui 仍 0.84.4，openai SDK 仍 6.40.0）→ UA / `X-Stainless-*` 不变
+- **mock 抓包实证**：1.3.0 与 1.3.1 在三种模式（设备凭证+attestation / 设备凭证无 attestation / 普通 key）下的出站头集合**完全一致**，唯一差异是 `x-u1s1-version` 的值
+- 1.3.1 官方更新记录内容全为客户端修复（`u1s1 model` 与实时模型列表一致、大响应不无界占用资源、子任务超时不误报成功、refactor workflow 不丢未提交修改、workflow 续跑重执失败任务），无网关协议变更
+
+### 验证
+
+- 新增 8 项测试：`internal/upstream/retryafter_test.go`（`Chat`/`DeviceChat` 捕获 `Retry-After`、无该头时为空）与 `internal/server/retryafter_test.go`（`safeRetryAfter` 表驱动 13 例含 CR/LF 注入与非法值、透传保留/丢弃/不凭空造头、端到端 503+`Retry-After:9` 送达客户端）；`go test -race ./... -count=1` 全绿
+- **v0.9.0 attestation 生产回看（部署后 24h）**：运行中二进制 md5 与发布产物一致（`0846ce1d…`）；`签发 x-u1s1-attestation 失败` **0 次**；设备通道 **294 成功 / 40 失败**（均为额度耗尽与限流）
+- **真实网关端到端复验（额度恢复后）**：用有额度账号（device_id 656）跑 `TestRealGatewayAttestation -count=1` 带 `U1S1_REAL_CHAT=1` → **`✅ 真实 chat 成功 status=200`**；令牌 payload `u=463 d=656`（与另一账号 `u=531 d=655` 不同），再次印证令牌按 user+device 绑定
+- 上一版遗留的「网关是否强制校验 attestation」至此彻底关闭：**带真实令牌的请求在真实网关上端到端 200**
+
 ## v0.9.0 (2026-08-30)
 
 ### 新增

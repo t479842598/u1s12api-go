@@ -211,9 +211,10 @@ func (c *Client) Chat(ctx context.Context, apiKey string, body []byte) (*http.Re
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
+		retryAfter := resp.Header.Get("Retry-After")
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), RetryAfter: retryAfter}
 	}
 	return resp, nil
 }
@@ -222,6 +223,10 @@ func (c *Client) Chat(ctx context.Context, apiKey string, body []byte) (*http.Re
 type APIError struct {
 	StatusCode int
 	Body       string
+	// RetryAfter 上游 Retry-After 头原值（缺省为空）。
+	// Gateway 对可重试的 503 model_unavailable 会带该头（u1s1-cli 1.3.1 同期服务端变更），
+	// 透传后才能让客户端按官方退避时长重试，而不是立刻反复重试。
+	RetryAfter string
 }
 
 func (e *APIError) Error() string {

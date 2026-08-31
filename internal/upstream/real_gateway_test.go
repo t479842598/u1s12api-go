@@ -19,7 +19,7 @@ import (
 //	    "select device_token,device_private_jwk,device_public_jwk from accounts where device_id='655';"
 //	本地执行：
 //	  U1S1_DEV_TOKEN=... U1S1_DEV_PRIV='{"kty":...}' U1S1_DEV_PUB='{"kty":...}' \
-//	  U1S1_PROXY=http://127.0.0.1:7897 U1S1_EXPECT_VERSION=1.3.0 \
+//	  U1S1_PROXY=http://127.0.0.1:7897 U1S1_EXPECT_VERSION=1.3.1 \
 //	  go test ./internal/upstream/ -run TestRealGateway -v
 func TestRealGatewayAttestation(t *testing.T) {
 	tok := os.Getenv("U1S1_DEV_TOKEN")
@@ -40,7 +40,7 @@ func TestRealGatewayAttestation(t *testing.T) {
 
 	version := os.Getenv("U1S1_EXPECT_VERSION")
 	if version == "" {
-		version = "1.3.0"
+		version = "1.3.1"
 	}
 	dc := NewDeviceClient("https://api.u1s1.io/v1", os.Getenv("U1S1_PROXY"),
 		func() string { return version }, nil)

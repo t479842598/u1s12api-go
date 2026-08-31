@@ -38,7 +38,7 @@ func deviceFixture(t *testing.T) (*DeviceClient, func() http.Header) {
 		p, _ := fingerprint.ProfileByID("linux-x64")
 		return p
 	}
-	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.0" }, profile)
+	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.1" }, profile)
 	return dc, func() http.Header { return captured }
 }
 
@@ -63,8 +63,8 @@ func TestDeviceMeSendsVersionHeader(t *testing.T) {
 		t.Fatalf("DeviceMe 失败: %v", err)
 	}
 	h := captured()
-	if h.Get("x-u1s1-version") != "1.3.0" {
-		t.Errorf("x-u1s1-version = %q, 期望 1.3.0", h.Get("x-u1s1-version"))
+	if h.Get("x-u1s1-version") != "1.3.1" {
+		t.Errorf("x-u1s1-version = %q, 期望 1.3.1", h.Get("x-u1s1-version"))
 	}
 	if !strings.HasPrefix(h.Get("Authorization"), "DPoP ") {
 		t.Errorf("Authorization = %q, 期望 DPoP", h.Get("Authorization"))
@@ -89,7 +89,7 @@ func TestDeviceChatClientFingerprint(t *testing.T) {
 	}
 	h := captured()
 	checks := map[string]string{
-		"X-U1s1-Version":              "1.3.0",
+		"X-U1s1-Version":              "1.3.1",
 		"X-U1s1-Client":               fingerprint.ClientSurface,
 		"X-U1s1-Platform":             "linux-x64",
 		"User-Agent":                  fingerprint.UserAgent(fingerprint.Profiles[2]), // linux-x64
@@ -157,7 +157,7 @@ func TestDeviceModelsNoAttestation(t *testing.T) {
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m1"}]}`))
 	}))
 	t.Cleanup(srv.Close)
-	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.0" }, nil)
+	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.1" }, nil)
 	res, err := dc.DeviceModels(context.Background(), deviceCredential(t))
 	if err != nil {
 		t.Fatalf("DeviceModels 失败: %v", err)

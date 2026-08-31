@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -478,9 +479,32 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// passthroughUpstreamError 原样透传上游错误状态码与错误体。
+// retryAfterDelayRE / retryAfterDateRE 对应 RFC 9110 的两种合法 Retry-After 形式。
+var (
+	retryAfterDelayRE = regexp.MustCompile(`^\d{1,10}$`)
+	retryAfterDateRE  = regexp.MustCompile(`^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$`)
+)
+
+// safeRetryAfter 判定上游 Retry-After 能否安全透传：只接受 delay-seconds 或 HTTP-date，
+// 其余（含 CR/LF、控制字符、超长、垃圾值）一律丢弃，避免响应头注入与客户端被误导。
+func safeRetryAfter(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if retryAfterDelayRE.MatchString(v) || retryAfterDateRE.MatchString(v) {
+		return v
+	}
+	return ""
+}
+
+// passthroughUpstreamError 把上游错误原样透传给客户端。
+// 保留 Retry-After：Gateway 对可重试的 503 model_unavailable 会下发该退避头（u1s1-cli 1.3.1 同期服务端变更）。
 func passthroughUpstreamError(w http.ResponseWriter, apiErr *upstream.APIError) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if ra := safeRetryAfter(apiErr.RetryAfter); ra != "" {
+		w.Header().Set("Retry-After", ra)
+	}
 	w.WriteHeader(apiErr.StatusCode)
 	_, _ = w.Write([]byte(apiErr.Body))
 }

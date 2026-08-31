@@ -563,9 +563,10 @@ func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
+		retryAfter := resp.Header.Get("Retry-After")
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), RetryAfter: retryAfter}
 	}
 	return resp, nil
 }
