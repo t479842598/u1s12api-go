@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.9.3 (2026-09-01)
+
+### 变更
+
+- **旧版 `u1s1-` API Key 推理通道已被网关关闭（403 `u1s1_client_only`），服务改为只用设备凭证通道**：
+  - 新增 `upstream.KeyClientOnlyRejected()` 识别网关「API 推理请求仅支持 u1s1 客户端；旧版 API Key 仅在明确的历史兼容窗口内可用…`type:forbidden, code:u1s1_client_only`」的 403
+  - `tryDeviceChatCompletion` 改为返回 `(served, accountsExisted, hint)`：区分「没配官网账号」与「有账号但全部不可用」
+  - **有设备账号但全部不可用（额度耗尽 / 上游限流 / 网络异常）→ 返回清晰的 `503 device_channel_unavailable`，不再回退 Key 池**。修复前：设备通道任何失败都无条件 continue 穿完账号再回退 Key 池，而 Key 池现已被网关 403 封禁 → 客户端收到 403，且继续用旧 Key 有**账号封禁风险**（公告 #6 + v1.3.0 风控）
+  - Key 池通道命中 `u1s1_client_only` → **透传上游真实消息、立即禁用该 Key（`pool.DisableKey`）、不再跨 Key 重试**（换一把必然同样 403）
+  - 新增 `pool.DisableKey(id, reason)`：把确定性拒绝的 Key 标记 disabled，避免池反复拾取、在官方风控里留下频次痕迹
+
+### 逆向核对（本次「u1s1 更新」同步）
+
+用户提示用安装脚本 `curl -fsSL https://u1s1.io/releases/install.sh | bash` 核对。结论：**无新 CLI 版本、无请求头 / 指纹变化**，真正变化是服务端对旧版 Key 通道的强制封禁落地。
+
+- **版本**：npm `latest` = 1.3.1；官网 `https://u1s1.io/releases/LATEST` = **1.3.1**；npm 无 `next/beta` 等预发布 tag；更新记录顶部仍 v1.3.1
+- **官方便携包与 npm 逐字节一致**：下载 `u1s1-cli-1.3.1-darwin-arm64.tar.gz`，其 `device-auth.js` / `api.js` / `config.js` 与 npm 1.3.1 **完全相同**（diff 无差异）—— 我们 v0.9.1 起的指纹实现就是真实 CLI 的权威实现
+- **设备凭证通道仍通过**：真实网关复验 attestation 正常签发（payload `v=1 u=531 d=655`，TTL 168h），带完整指纹头的真实 chat 返回 **429 额度不足**（而非 403）→ 网关认可为 u1s1 客户端，仅额度耗尽
+- **旧版 Key 通道确实被封**：用生产 active `u1s1-` key + Key 通道完整指纹头直连 `https://api.u1s1.io/v1/chat/completions` → **HTTP 403 `u1s1_client_only`**
+- 推断：这就是「u1s1 更新了」—— 不是 CLI 或请求头更新，而是网关把 `u1s1-` Key 推理通道关进「历史兼容窗口」（可能窗口内的个别 key 尚可、但整体不再可靠），配合 v1.3.0「疑似非官方凭据代理后台累计风控证据、达条件自动封禁」与 08-30 公告 #6「Token 不得接入第三方工具」
+
+### 验证
+
+- 新增 `upstream.KeyClientOnlyRejected` 分类器测试 4 例（生产错误体 / 仅中文措辞变体 / 非 403 不算 / 普通 403 不误判）
+- 新增 `internal/server/client_only_test.go` 两个回归测试：
+  - `TestDeviceChannelUnavailableNoKeyFallback`：设备账号全部「上游限流 429」时返回 **503 device_channel_unavailable**，且 Key 池**不被调用**（`Bearer u1s1-` 断言 0 次）
+  - `TestKeyPoolClientOnly403DisablesKey`：无账号时 Key 池命中 `u1s1_client_only` → 透传 403、该 Key 被禁用、只调 1 次（不跨 Key 重试）
+- **回归有效性已验证**：临时把「设备通道不可用→回退 Key 池」放回后 `TestDeviceChannelUnavailableNoKeyFallback` 确实失败（`期望 503，实际 status=200`，日志显示 `chat 完成 key#1 status=success` 回退成功）→ 证明能抓到 bug
+- `go build ./...` + `go test ./... -count=1` + `go test -race ./internal/... -count=1` 全绿
+
 ## v0.9.2 (2026-09-01)
 
 ### 修复

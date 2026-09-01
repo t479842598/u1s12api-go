@@ -317,6 +317,30 @@ func RequestScopedError(statusCode int, body string) bool {
 	return true
 }
 
+// KeyClientOnlyRejected 识别网关「旧版 u1s1- API Key 推理通道已被关闭」的 403。
+//
+// 实测形态（2026-09-01 直连真网关，带完整 Key 通道指纹头仍 403）：
+//
+//	HTTP 403 {"error":{"message":"API 推理请求仅支持 u1s1 客户端；旧版 API Key 仅在
+//	          明确的历史兼容窗口内可用。请升级并重新登录…","type":"forbidden",
+//	           "code":"u1s1_client_only"}}
+//
+// 它标志着 u1s1 已经收紧“仅限官方客户端”，纯 u1s1- API Key 的推理通道被关闭：
+// 旧版 Key 只有仍在“历史兼容窗口”内才可能放行，且继续用非官方客户端的 Key
+// 账号会按公告 #6 / v1.3.0 风控被**封禁**。命中后必须：原样透传给客户端并
+// 停止换 Key 重试（换一把必然同样 403），同时把该 Key 标记禁用，避免池继续拾取、
+// 反复触发导致账号封禁风险。
+func KeyClientOnlyRejected(statusCode int, body string) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "u1s1_client_only") ||
+		strings.Contains(lower, "仅支持 u1s1 客户端") ||
+		strings.Contains(lower, "仅限 u1s1 客户端") ||
+		strings.Contains(lower, "只支持 u1s1 客户端")
+}
+
 // NextBeijingMidnight 下一次北京时间 0 点。
 func NextBeijingMidnight(now time.Time) time.Time {
 	loc := time.FixedZone("CST", 8*3600)

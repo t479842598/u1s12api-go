@@ -186,3 +186,20 @@ func (p *Pool) ActiveCount() int {
 	}
 	return n
 }
+
+// DisableKey 把某把 Key 标记为 disabled（上游已封禁该通道，如 u1s1_client_only）。
+// 用于“换一把 Key 也必然同样 403”的确定性拒绝：立即禁用让池不再拾取，
+// 避免轮询到该 Key 反复触发、并在官方风控里留下频次痕迹。
+func (p *Pool) DisableKey(id int64, reason string) {
+	p.mu.Lock()
+	for _, k := range p.keys {
+		if k.ID == id {
+			k.Status = "disabled"
+			k.CooldownUntil = time.Time{}
+			p.mu.Unlock()
+			_ = p.store.SetUpstreamKeyStatus(id, "disabled", time.Time{}, reason)
+			return
+		}
+	}
+	p.mu.Unlock()
+}

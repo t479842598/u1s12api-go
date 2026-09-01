@@ -10,6 +10,8 @@ const moderationBody = `{"error":{"message":"<400> ***.***.DataInspectionFailed:
 
 const quotaBody429 = `{"error":{"message":"免费用量包余额不足","type":"insufficient_quota","code":"quota_exceeded"}}`
 
+const clientOnly403Body = `{"error":{"message":"API 推理请求仅支持 u1s1 客户端；旧版 API Key 仅在明确的历史兼容窗口内可用。请升级并重新登录","type":"forbidden","code":"u1s1_client_only"}}`
+
 func TestRequestScopedError(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -52,5 +54,23 @@ func TestContentModerationRejected(t *testing.T) {
 	// 额度错误不应被误判为内容审查
 	if ContentModerationRejected(http.StatusBadRequest, quotaBody429) {
 		t.Error("额度类错误不应判为内容审查")
+	}
+}
+
+func TestKeyClientOnlyRejected(t *testing.T) {
+	if !KeyClientOnlyRejected(http.StatusForbidden, clientOnly403Body) {
+		t.Error("生产实测的 u1s1_client_only 403 应被识别")
+	}
+	// 变体：仅中文措辞、未带 code
+	if !KeyClientOnlyRejected(http.StatusForbidden, `{"error":{"message":"API 推理请求仅限 u1s1 客户端"}}`) {
+		t.Error("仅限 u1s1 客户端 措辞应被识别")
+	}
+	// 非 403 不算
+	if KeyClientOnlyRejected(http.StatusUnauthorized, clientOnly403Body) {
+		t.Error("非 403 不应判为 u1s1_client_only")
+	}
+	// 设备通道的 403（令牌无效）与旧版 Key 通道 403 不同，不应误判
+	if KeyClientOnlyRejected(http.StatusForbidden, `{"error":{"message":"invalid credential"}}`) {
+		t.Error("普通 403 不应误判为旧版 Key 通道关闭")
 	}
 }

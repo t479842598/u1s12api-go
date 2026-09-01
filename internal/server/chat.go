@@ -133,9 +133,19 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 优先设备凭证通道：若存在已授权且启用的官网账号，用其设备凭证（DPoP + 指纹头）
-	// 调上游，消耗「仅限 u1s1 客户端使用」的加量包。失败则回退下方 u1s1- Key 池。
+	// 调上游，消耗「仅限 u1s1 客户端使用」的加量包。
 	started := time.Now()
-	if s.tryDeviceChatCompletion(w, r, localKeyName, &req, forwardBody, started) {
+	served, accountsExisted, devHint := s.tryDeviceChatCompletion(w, r, localKeyName, &req, forwardBody, started)
+	if served {
+		return
+	}
+	// 有设备账号但全部不可用（额度耗尽 / 上游限流 / 网络异常）：不再回退 u1s1- Key 池。
+	// 上游 v0.9.3 起已对旧版 u1s1- Key 关闭推理通道（403 u1s1_client_only），回退只会有
+	// 403 并给账号带来封禁风险；改为返回清晰的设备通道错误。
+	if accountsExisted {
+		logger.Warnf("设备通道不可用，未回退 Key 池（避免 403/封号）：%s", truncate(devHint, 200))
+		writeOpenAIError(w, http.StatusServiceUnavailable, "device_channel_unavailable",
+			truncate(devHint, 300)+"; 请稍后重试或检查官网账号额度")
 		return
 	}
 
@@ -160,6 +170,16 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				lastErrBody = apiErr.Body
 				s.pool.ReportResult(ks.ID, apiErr.StatusCode, apiErr.Body)
 				logger.Warnf("chat 上游错误 key#%d status=%d body=%.200s", ks.ID, apiErr.StatusCode, apiErr.Body)
+				// 网关已关闭旧版 u1s1- Key 推理通道（403 u1s1_client_only）：换 Key 必然同样 403，
+				// 且继续用有账号封禁风险。立即禁用该 Key、透传上游真实消息、不再换 Key 重试。
+				if upstream.KeyClientOnlyRejected(apiErr.StatusCode, apiErr.Body) {
+					s.pool.DisableKey(ks.ID, "上游已关闭旧版 u1s1- API Key 推理通道（u1s1_client_only），需改走设备凭证账号")
+					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
+						apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+					logger.Warnf("chat 旧版 u1s1- Key 被上游拒绝并已禁用 key#%d：u1s1 仅支持官方客户端设备凭证，请配置已登录官网账号", ks.ID)
+					passthroughUpstreamError(w, apiErr)
+					return
+				}
 				// 请求级错误（内容审查 / 未知模型 / 请求体非法）：换 Key 必然同样失败，立即透传。
 				// 与设备通道共用同一判据，避免两条通道口径分叉。
 				if upstream.RequestScopedError(apiErr.StatusCode, apiErr.Body) {
@@ -244,16 +264,25 @@ func (s *Server) deviceIsExhausted(accountID int64) bool {
 }
 
 // tryDeviceChatCompletion 尝试用已授权官网账号的设备凭证（DPoP + 指纹头）转发对话。
-// 无已授权账号返回 false（走 u1s1- Key 池）。
+//
+// 返回三元组：
+//	 served        —— 已写出响应（成功，或已被请求级错误透传），调用方直接返回；
+//	 accountsExisted —— 是否存在已授权账号（区分「没配账号」与「有账号但全不可用」）；
+//	 hint          —— 当 accountsExisted 但未 served 时的人类可读原因，供调用方构造清晰错误。
 //
 // 多账号调度策略：按剩余额度降序——**有额度的账号直接调用**（额度最多者优先）；
 // 仅当其触发 quota_exceeded（当日额度耗尽）被标记冷却后，本请求切到下一个
-// 有额度的账号，后续请求不再调用已冷却账号。全部耗尽/失败才返回 false 回退 Key 池。
-func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request, localKeyName string, req *chatReq, forwardBody []byte, started time.Time) bool {
+// 有额度的账号，后续请求不再调用已冷却账号。
+//
+// 重要（v0.9.3）：上游已关闭旧版 u1s1- API Key 推理通道（403 u1s1_client_only），
+// 全部设备账号不可用时应返回 accountsExisted=true，让调用方返回清晰的设备通道错误，
+// **而不是回退 Key 池**（回退只会 403，且有账号封禁风险）。
+func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request, localKeyName string, req *chatReq, forwardBody []byte, started time.Time) (served bool, accountsExisted bool, hint string) {
 	accounts, err := s.store.ListAuthorizedEnabledAccounts()
 	if err != nil || len(accounts) == 0 {
-		return false
+		return false, false, ""
 	}
+	lastHint := "设备通道不可用"
 
 	// 过滤已标记当日额度耗尽的账号。
 	candidates := make([]*store.Account, 0, len(accounts))
@@ -264,7 +293,7 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 		candidates = append(candidates, a)
 	}
 	if len(candidates) == 0 {
-		return false
+		return false, true, "所有设备账号当日额度已耗尽（北京时间 0 点恢复），请稍后重试"
 	}
 
 	// 尝试顺序：按剩余额度降序——额度最多的账号直接调用；
@@ -306,17 +335,21 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 						logger.Warnf("设备通道被上游内容审查拒绝（请求级，停止轮换）account=%s：需调整输入文本，换账号无效", acc.Email)
 					}
 					passthroughUpstreamError(w, apiErr)
-					return true
+					return true, true, ""
 				}
 				if upstream.QuotaSignal(apiErr.StatusCode, apiErr.Body) {
 					// 当日额度耗尽：标记该设备冷却，切到下一个有额度的账号。
 					s.markDeviceExhausted(acc.ID, upstream.NextBeijingMidnight(time.Now()))
 					logger.Infof("设备账号当日额度耗尽，标记冷却 account=%s（北京时间 0 点恢复）", acc.Email)
+					lastHint = fmt.Sprintf("设备账号 %s 当日额度耗尽（北京时间 0 点恢复）", acc.Email)
+				} else {
+					lastHint = fmt.Sprintf("设备账号 %s 上游返回 %d：%s", acc.Email, apiErr.StatusCode, truncate(apiErr.Body, 120))
 				}
 				continue
 			}
 			logger.Warnf("设备通道网络错误 account=%s: %v", acc.Email, derr)
 			s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, 0, 0, 0, 0, "error", truncate(derr.Error(), 1000), clientIP(r))
+			lastHint = fmt.Sprintf("设备账号 %s 网络异常：%v", acc.Email, derr)
 			continue
 		}
 
@@ -336,11 +369,12 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 		s.recordRequestFull(localKeyName, req.Model, 0, req.Stream, started, resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
 		logger.Infof("设备通道 chat 完成 account=%s model=%s stream=%v status=%s in=%d out=%d",
 			acc.Email, req.Model, req.Stream, status, usageIn, usageOut)
-		return true
+		return true, true, ""
 	}
 
-	// 全部设备账号失败/已耗尽 → 回退 Key 池。
-	return false
+	// 全部设备账号失败/已耗尽 → accountsExisted=true，由调用方决定（不自动回退 Key 池，
+	// 因为上游已对旧版 u1s1- Key 关闭推理通道，回退只会有 403 + 封号风险）。
+	return false, true, lastHint
 }
 
 // pipeResponse 把上游响应透传给客户端；流式时边转发边扫描用量 chunk。
