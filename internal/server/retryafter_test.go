@@ -91,8 +91,9 @@ func TestChatForwardsRetryAfterEndToEnd(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	fx.addKeys(t, "u1s1-e2ekeye2ekeye2ekey1")
-	fx.addLocalKey(t, "default", "sk-local-test")
+	// (v0.9.4) 推理用授权官网账号（设备凭证）。
+	mkDeviceAccount(t, fx, "ra@test.dev", "u1s1d-ra", 5_000_000)
+	prepareDeviceChatFX(t, fx)
 
 	resp := postDeviceChat(t, fx.ts.URL, "sk-local-test")
 	defer resp.Body.Close()

@@ -74,3 +74,18 @@ func TestKeyClientOnlyRejected(t *testing.T) {
 		t.Error("普通 403 不应误判为旧版 Key 通道关闭")
 	}
 }
+
+func TestCredentialScopedError(t *testing.T) {
+	// 凭证级：换下一把凭证可能解决 → 应在多凭证间轮换
+	for _, sc := range []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests} {
+		if !CredentialScopedError(sc, `{}`) {
+			t.Errorf("状态码 %d 应判为凭证级（可轮换）", sc)
+		}
+	}
+	// 非凭证级：请求级/网关级 → 不应轮换
+	for _, sc := range []int{http.StatusBadRequest, http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusInternalServerError} {
+		if CredentialScopedError(sc, `{}`) {
+			t.Errorf("状态码 %d 不应判为凭证级（应立即透传）", sc)
+		}
+	}
+}

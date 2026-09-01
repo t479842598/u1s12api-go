@@ -66,6 +66,7 @@ func TestNormalizeChatRoles(t *testing.T) {
 
 // TestChatCompletionsNormalizesDeveloperRole 复现线上报障：上游严格反序列化
 // 拒收 role=developer（400），网关必须在转发前归一化为 system，保证调用成功。
+// (v0.9.4) 推理改用授权官网账号（设备凭证）验证。
 func TestChatCompletionsNormalizesDeveloperRole(t *testing.T) {
 	var sawDeveloper bool
 	fx := setupTest(t, func(w http.ResponseWriter, r *http.Request) {
@@ -84,12 +85,13 @@ func TestChatCompletionsNormalizesDeveloperRole(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`)
 	})
-	fx.addKeys(t, "u1s1-aaaa1111bbbb2222cccc")
-	fx.addLocalKey(t, "default", "sk-local-test-key")
+	// 推理用授权官网账号（设备凭证）。
+	mkDeviceAccount(t, fx, "dev@test.dev", "u1s1d-dev", 5_000_000)
+	prepareDeviceChatFX(t, fx)
 
 	reqBody := `{"model":"deepseek-v4-flash","messages":[{"role":"developer","content":"be short"},{"role":"user","content":"hi"}],"stream":false}`
 	req, _ := http.NewRequest(http.MethodPost, fx.ts.URL+"/v1/chat/completions", strings.NewReader(reqBody))
-	req.Header.Set("Authorization", "Bearer sk-local-test-key")
+	req.Header.Set("Authorization", "Bearer sk-local-test")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

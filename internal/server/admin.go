@@ -715,22 +715,17 @@ func (s *Server) handleChatTest(w http.ResponseWriter, r *http.Request) {
 		},
 		"stream": false,
 	})
-	ks, err := s.pool.Pick()
-	if err != nil {
-		writeAPIError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	cli := s.client()
-	if cli == nil {
-		writeAPIError(w, http.StatusBadGateway, "上游客户端不可用")
+	// (v0.9.4) 推理一律用授权官网账号（设备凭证），旧版 u1s1- API Key 已被上游禁止用于推理。
+	att, cred, cerr := s.bestDeviceCredential(r.Context())
+	if cerr != nil {
+		writeAPIError(w, http.StatusServiceUnavailable, cerr.Error())
 		return
 	}
 	started := time.Now()
-	resp, cerr := cli.Chat(r.Context(), ks.Key, payload)
+	resp, cerr := s.deviceClient().DeviceChat(r.Context(), cred, payload, att)
 	if cerr != nil {
 		var apiErr *upstream.APIError
 		if asAPIError(cerr, &apiErr) {
-			s.pool.ReportResult(ks.ID, apiErr.StatusCode, apiErr.Body)
 			writeJSON(w, http.StatusBadGateway, map[string]any{
 				"detail": fmt.Sprintf("上游 %d: %s", apiErr.StatusCode, truncate(apiErr.Body, 500)),
 			})
@@ -745,7 +740,6 @@ func (s *Server) handleChatTest(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadGateway, "读取上游响应失败: "+err.Error())
 		return
 	}
-	s.pool.ReportResult(ks.ID, resp.StatusCode, "")
 	var parsed struct {
 		Choices []struct {
 			Message struct {

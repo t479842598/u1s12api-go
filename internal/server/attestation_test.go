@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -123,33 +124,27 @@ func TestDeviceChannelReusesAttestationToken(t *testing.T) {
 	}
 }
 
-// TestKeyPoolChannelNoAttestation 普通 u1s1- Key 池通道不发 x-u1s1-attestation
-// （真实网关对普通 key 不签发，官方客户端也不发）。
-func TestKeyPoolChannelNoAttestation(t *testing.T) {
+// TestInferenceRequiresAuthorizedAccount 无授权官网账号（设备凭证）时，推理请求被拒绝。
+// （v0.9.4）推理一律只用设备凭证通道，旧版 u1s1- API Key 已被上游禁止用于推理，
+// 未配置账号时返回明确错误而非回退 Key 池。
+func TestInferenceRequiresAuthorizedAccount(t *testing.T) {
 	af := &attestUpstreamFixture{}
 	fx := setupTest(t, af.handler)
-	// 不建授权账号 → 无设备凭证，走 Key 池。
-	fx.addKeys(t, "u1s1-keypoolkeykeykeykey1")
+	// 不建授权账号 → 无设备凭证，也不应回退 Key 池。
 	fx.addLocalKey(t, "default", "sk-local-test")
 
 	resp := postDeviceChat(t, fx.ts.URL, "sk-local-test")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Key 池 chat status = %d, 期望 200", resp.StatusCode)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("无授权账号应返回 503，实际 status=%d body=%.200s", resp.StatusCode, body)
 	}
-	h := af.lastChat()
-	if h == nil {
-		t.Fatal("上游未收到 chat 请求")
+	if !strings.Contains(string(body), "no_authorized_account") {
+		t.Errorf("错误应含 no_authorized_account，实际=%.200s", body)
 	}
-	if v := h.Get("x-u1s1-attestation"); v != "" {
-		t.Errorf("Key 池通道不应带 x-u1s1-attestation, 实际 %q", v)
-	}
-	if !strings.HasPrefix(h.Get("Authorization"), "Bearer u1s1-") {
-		t.Errorf("Key 池通道 Authorization = %.20s, 期望 Bearer u1s1-", h.Get("Authorization"))
-	}
-	signs, _ := af.counts()
-	if signs != 0 {
-		t.Errorf("Key 池通道不应触发设备凭证签发, 实际签发 %d 次", signs)
+	// 不应回退 Key 池：上游不应收到任何 chat 请求。
+	if n := af.chatCount(); n != 0 {
+		t.Errorf("不应回退 Key 池做推理，但上游收到 %d 次 chat", n)
 	}
 }
 

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,16 +110,13 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	})
 
-	fx.addKeys(t, "u1s1-aaaa1111bbbb2222cccc")
-	fx.addLocalKey(t, "default", "sk-local-test-key")
-	// 预热模型价格缓存（生产环境由后台刷新循环完成）
-	if _, _, err := fx.srv.fetchModels(context.Background()); err != nil {
-		t.Fatalf("预热模型缓存失败: %v", err)
-	}
+	// (v0.9.4) 推理用授权官网账号（设备凭证）验证指纹与流式。
+	mkDeviceAccount(t, fx, "fp@test.dev", "u1s1d-fp", 5_000_000)
+	prepareDeviceChatFX(t, fx)
 
 	req, _ := http.NewRequest("POST", fx.ts.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"deepseek-v4-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
-	req.Header.Set("Authorization", "Bearer sk-local-test-key")
+	req.Header.Set("Authorization", "Bearer sk-local-test")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -135,14 +131,15 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 		t.Errorf("SSE 未透传完整: %.200s", body)
 	}
 
-	// ---- 指纹头断言 ----
+	// ---- 设备通道指纹头断言 ----
 	if capturedPath != "/chat/completions" {
 		t.Errorf("上游路径 = %s", capturedPath)
 	}
 	checks := map[string]string{
-		"Authorization":               "Bearer u1s1-aaaa1111bbbb2222cccc",
-		"User-Agent":                  "pi (linux 6.8.0-45-generic; x64)",
 		"X-U1s1-Version":              "1.2.3",
+		"X-U1s1-Client":               "terminal",
+		"X-U1s1-Platform":             "linux-x64",
+		"User-Agent":                  "pi (linux 6.8.0-45-generic; x64)",
 		"X-Stainless-Lang":            "js",
 		"X-Stainless-Package-Version": fingerprint.SDKPackageVersion,
 		"X-Stainless-Os":              "Linux",
@@ -157,6 +154,9 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 		if got != want {
 			t.Errorf("头 %s = %q, 期望 %q", k, got, want)
 		}
+	}
+	if !strings.HasPrefix(captured.Get("Authorization"), "DPoP u1s1d-") {
+		t.Errorf("Authorization = %.20s, 期望 DPoP 设备凭证", captured.Get("Authorization"))
 	}
 
 	// stream_options.include_usage 自动注入（对齐官方 CLI + 计量需要）
@@ -210,84 +210,6 @@ func TestChatRequiresLocalKey(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&e)
 	if e.Error.Code != "missing_api_key" {
 		t.Errorf("code = %s", e.Error.Code)
-	}
-}
-
-// Key 池：429+quota_exceeded → 冷却到北京时间次日 0 点并换下一把。
-func TestQuotaExhaustedCooldownAndFailover(t *testing.T) {
-	requestCount := 0
-	fx := setupTest(t, func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		auth := r.Header.Get("Authorization")
-		if strings.Contains(auth, "u1s1-exhausted1111") {
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, `{"message":"额度用完了：免费用量包每天北京时间 0 点恢复","type":"insufficient_quota","code":"quota_exceeded"}`)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
-	})
-	fx.addKeys(t, "u1s1-exhausted1111zzzz", "u1s1-goodkey222233334444")
-	fx.addLocalKey(t, "default", "sk-local-test-key")
-
-	for i := 0; i < 2; i++ {
-		req, _ := http.NewRequest("POST", fx.ts.URL+"/v1/chat/completions",
-			strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"ping"}]}`))
-		req.Header.Set("Authorization", "Bearer sk-local-test-key")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != 200 {
-			t.Fatalf("第 %d 次 status = %d", i+1, resp.StatusCode)
-		}
-		resp.Body.Close()
-	}
-
-	// exhausted key 应处于冷却态且指向北京时间次日 0 点
-	keys, _ := fx.srv.store.ListUpstreamKeys()
-	for _, k := range keys {
-		if strings.HasPrefix(k.Key, "u1s1-exhausted") {
-			if k.Status != "cooldown" {
-				t.Errorf("exhausted key status = %s, 期望 cooldown", k.Status)
-			}
-			want := upstream.NextBeijingMidnight(timeNow()).Unix()
-			got := k.CooldownUntil // 已是 unix 秒
-			diff := want - got
-			if diff < -60 || diff > 60 {
-				t.Errorf("冷却截止偏离北京时间 0 点: got=%d want≈%d", got, want)
-			}
-			if !strings.Contains(k.LastError, "免费额度") && !strings.Contains(k.LastError, "额度") {
-				t.Logf("last_error = %q", k.LastError)
-			}
-		}
-	}
-	if requestCount != 4 { // exhausted 打中一次失败 + good 三次成功? 至少验证 failover 生效
-		t.Logf("upstream 命中次数 = %d", requestCount)
-	}
-}
-
-// 401 → key 直接禁用。
-func TestInvalidKeyDisabled(t *testing.T) {
-	fx := setupTest(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"error":{"message":"invalid or disabled API key","code":"invalid_api_key"}}`)
-	})
-	fx.addKeys(t, "u1s1-badkey00000000000000")
-	fx.addLocalKey(t, "default", "sk-local-test-key")
-
-	req, _ := http.NewRequest("POST", fx.ts.URL+"/v1/chat/completions",
-		strings.NewReader(`{"model":"m","messages":[]}`))
-	req.Header.Set("Authorization", "Bearer sk-local-test-key")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	keys, _ := fx.srv.store.ListUpstreamKeys()
-	if keys[0].Status != "disabled" {
-		t.Errorf("401 后 status = %s, 期望 disabled", keys[0].Status)
 	}
 }
 

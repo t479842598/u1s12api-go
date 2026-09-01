@@ -317,6 +317,22 @@ func RequestScopedError(statusCode int, body string) bool {
 	return true
 }
 
+// CredentialScopedError 判定「与具体凭证相关、换下一把凭证可能解决」的上游错误。
+//
+// 只有这类错误才应在多凭证间轮换（继续下一个账号 / 下一把 Key）；非此类错误是
+// **请求级**（请求体不合法，见 RequestScopedError）或**网关级**（如 503 model_unavailable，
+// 与用哪把凭证无关），轮换无益，应立即透传，避免把一次客户端请求放大成 N 次上游调用、
+// 并在官方风控里留下「同内容跨多凭证重复请求」特征。
+func CredentialScopedError(statusCode int, body string) bool {
+	if statusCode == http.StatusUnauthorized || // 401 凭证无效
+		statusCode == http.StatusPaymentRequired || // 402 额度/付费
+		statusCode == http.StatusForbidden || // 403（设备令牌失效、换设备等）
+		statusCode == http.StatusTooManyRequests { // 429 限流/额度
+		return true
+	}
+	return false
+}
+
 // KeyClientOnlyRejected 识别网关「旧版 u1s1- API Key 推理通道已被关闭」的 403。
 //
 // 实测形态（2026-09-01 直连真网关，带完整 Key 通道指纹头仍 403）：

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.4 (2026-09-01)
+
+### 变更
+
+- **推理彻底只用授权官网账号（设备凭证），不再使用 `u1s1-` API Key**：
+  - `handleChatCompletions`（`/v1/chat/completions`）去掉 Key 池兜底循环 —— 上游 u1s1 已把旧版 API Key 的推理通道封进「历史兼容窗口」（403 `u1s1_client_only`，见 v0.9.3），且继续用有封号风险。现在一律走设备凭证通道
+  - 无授权账号 → 返回 `503 no_authorized_account`（明确提示去后台添加并授权官网账号）；有账号但全不可用（额度耗尽/上游限流/网络异常）→ 返回 `503 device_channel_unavailable`（保留具体原因）
+  - 新增 `bestDeviceCredential()`：供「模型测试」等单次设备凭证路径复用
+  - **管理后台「模型测试」**（`handleChatTest`）也从 Key 池改用设备凭证
+  - 设备凭证通道对**网关级错误**（如 `503 model_unavailable + Retry-After`）立即透传并保留 `Retry-After`（新增 `upstream.CredentialScopedError` 区分「凭证级可轮换」与「请求/网关级应透传」），避免把客户端请求放大成 N 次上游调用、并丢失官方退避信号
+
+### 范围说明
+
+- **只封推理，辅助端点不受影响**（实测）：`/v1/models`（模型列表）、`/v1/me`（配额）用 `u1s1-` key 仍正常 200 —— 所以 `fetchModels`（模型列表缓存）、admin 查某 key 配额仍保留 key 通道（非推理，不产生 `/chat/completions` 调用）
+
+### 验证
+
+- 新增 `TestInferenceRequiresAuthorizedAccount`（无账号 → 503 `no_authorized_account`，且上游**未收到任何 chat 请求**）、`TestCredentialScopedError` 单元测试
+- 转换 4 个既有用例到设备凭证：`TestChatCompletionsForwardsFingerprintAndStreams`（设备通道指纹头：DPoP + x-u1s1-client/platform + X-Stainless-* + 流式）、`TestChatCompletionsNormalizesDeveloperRole`、`TestChatForwardsRetryAfterEndToEnd`（503+Retry-After 透传）、`TestKeyPoolChannelNoAttestation` → `TestInferenceRequiresAuthorizedAccount`
+- 删除 3 个「Key 池推理」前提的过时用例：`TestKeyPoolClientOnly403DisablesKey`、`TestQuotaExhaustedCooldownAndFailover`、`TestInvalidKeyDisabled`（该路径已移除；key 配额冷却/禁用逻辑仍保留，用于 `/models`、`/me` 等 key 管理端点）
+- `go build ./...` + `go test ./... -count=1` + `go test -race ./internal/... -count=1` 全绿（`go vet ./internal/server/` 通过）
+
 ## v0.9.3 (2026-09-01)
 
 ### 变更

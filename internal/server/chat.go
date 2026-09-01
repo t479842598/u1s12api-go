@@ -132,108 +132,26 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 优先设备凭证通道：若存在已授权且启用的官网账号，用其设备凭证（DPoP + 指纹头）
-	// 调上游，消耗「仅限 u1s1 客户端使用」的加量包。
+	// 设备凭证通道：(v0.9.4) 推理一律只用已授权官网账号（设备登录凭证），不再用旧版 u1s1- API Key。
+	// 上游 u1s1 已关闭旧版 API Key 的推理通道（403 u1s1_client_only），继续用只会 403 并有账号封禁风险。
 	started := time.Now()
 	served, accountsExisted, devHint := s.tryDeviceChatCompletion(w, r, localKeyName, &req, forwardBody, started)
 	if served {
 		return
 	}
-	// 有设备账号但全部不可用（额度耗尽 / 上游限流 / 网络异常）：不再回退 u1s1- Key 池。
-	// 上游 v0.9.3 起已对旧版 u1s1- Key 关闭推理通道（403 u1s1_client_only），回退只会有
-	// 403 并给账号带来封禁风险；改为返回清晰的设备通道错误。
+
+	// 设备通道不可用：无论有无账号，都不回退 Key 池，返回清晰错误。
 	if accountsExisted {
-		logger.Warnf("设备通道不可用，未回退 Key 池（避免 403/封号）：%s", truncate(devHint, 200))
+		// 有账号但全部不可用（额度耗尽 / 上游限流 / 网络异常 / 凭证失效）。
+		logger.Warnf("设备通道不可用：%s", truncate(devHint, 200))
 		writeOpenAIError(w, http.StatusServiceUnavailable, "device_channel_unavailable",
 			truncate(devHint, 300)+"; 请稍后重试或检查官网账号额度")
 		return
 	}
-
-	maxAttempts := 3
-	var lastErrBody string
-
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		ks, err := s.pool.Pick()
-		if err != nil {
-			writeOpenAIError(w, http.StatusServiceUnavailable, "no_available_key", err.Error())
-			return
-		}
-		cli := s.client()
-		if cli == nil {
-			writeOpenAIError(w, http.StatusBadGateway, "client_unavailable", "上游客户端不可用（检查出口代理设置）")
-			return
-		}
-		resp, cerr := cli.Chat(r.Context(), ks.Key, forwardBody)
-		if cerr != nil {
-			var apiErr *upstream.APIError
-			if asAPIError(cerr, &apiErr) {
-				lastErrBody = apiErr.Body
-				s.pool.ReportResult(ks.ID, apiErr.StatusCode, apiErr.Body)
-				logger.Warnf("chat 上游错误 key#%d status=%d body=%.200s", ks.ID, apiErr.StatusCode, apiErr.Body)
-				// 网关已关闭旧版 u1s1- Key 推理通道（403 u1s1_client_only）：换 Key 必然同样 403，
-				// 且继续用有账号封禁风险。立即禁用该 Key、透传上游真实消息、不再换 Key 重试。
-				if upstream.KeyClientOnlyRejected(apiErr.StatusCode, apiErr.Body) {
-					s.pool.DisableKey(ks.ID, "上游已关闭旧版 u1s1- API Key 推理通道（u1s1_client_only），需改走设备凭证账号")
-					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
-						apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
-					logger.Warnf("chat 旧版 u1s1- Key 被上游拒绝并已禁用 key#%d：u1s1 仅支持官方客户端设备凭证，请配置已登录官网账号", ks.ID)
-					passthroughUpstreamError(w, apiErr)
-					return
-				}
-				// 请求级错误（内容审查 / 未知模型 / 请求体非法）：换 Key 必然同样失败，立即透传。
-				// 与设备通道共用同一判据，避免两条通道口径分叉。
-				if upstream.RequestScopedError(apiErr.StatusCode, apiErr.Body) {
-					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
-						apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
-					if upstream.ContentModerationRejected(apiErr.StatusCode, apiErr.Body) {
-						logger.Warnf("chat 被上游内容审查拒绝（请求级，不重试）key#%d：需调整输入文本，换 Key 无效", ks.ID)
-					}
-					passthroughUpstreamError(w, apiErr)
-					return
-				}
-				// 可重试：key 级故障（无效/额度尽/限流）→ 换下一把；每次失败都落请求记录便于排查。
-				if apiErr.StatusCode == 401 || apiErr.StatusCode == 402 || apiErr.StatusCode == 429 {
-					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
-						apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
-					continue
-				}
-				s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
-					apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
-				passthroughUpstreamError(w, apiErr)
-				return
-			}
-			// 网络/代理层错误
-			lastErrBody = cerr.Error()
-			logger.Warnf("chat 网络错误 key#%d: %v", ks.ID, cerr)
-			s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
-				0, 0, 0, 0, "error", truncate(cerr.Error(), 1000), clientIP(r))
-			continue
-		}
-
-		// 成功拿到响应
-		s.pool.ReportResult(ks.ID, resp.StatusCode, "")
-		usageIn, usageOut, recErr := s.pipeResponse(w, r, resp, req.Stream)
-		tokens := usageIn + usageOut
-		if tokens > 0 {
-			_ = s.store.TouchUpstreamKey(ks.ID, tokens)
-		}
-		status := "success"
-		errMsg := ""
-		if recErr != nil {
-			status = "error"
-			errMsg = truncate(recErr.Error(), 1000)
-		}
-		cost := s.estimateCost(req.Model, usageIn, usageOut)
-		s.recordRequestFull(localKeyName, req.Model, ks.ID, req.Stream, started,
-			resp.StatusCode, usageIn, usageOut, cost, status, errMsg, clientIP(r))
-		logger.Infof("chat 完成 key#%d model=%s stream=%v status=%s in=%d out=%d dur=%dms ip=%s",
-			ks.ID, req.Model, req.Stream, status, usageIn, usageOut,
-			time.Since(started).Milliseconds(), clientIP(r))
-		return
-	}
-
-	writeOpenAIError(w, http.StatusBadGateway, "all_keys_failed",
-		fmt.Sprintf("所有 U1S1 Key 尝试均失败（最后错误: %.300s）", lastErrBody))
+	// 没有配置任何授权官网账号。
+	logger.Warnf("未配置授权官网账号，推理请求被拒绝（u1s1 已禁止旧版 API Key 用于推理）")
+	writeOpenAIError(w, http.StatusServiceUnavailable, "no_authorized_account",
+		"未配置授权官网账号（设备登录凭证），无法调用模型。上游 u1s1 已禁止旧版 API Key 用于推理；请在后台添加并授权一个官网账号后重试")
 }
 
 // deviceQuotaSortKey 设备账号的剩余额度排序键（降序：额度最多者优先直接调用）。
@@ -261,6 +179,37 @@ func (s *Server) deviceIsExhausted(accountID int64) bool {
 	defer s.deviceQuotaExhaustedMu.Unlock()
 	until, ok := s.deviceQuotaExhausted[accountID]
 	return ok && time.Now().Before(until)
+}
+
+// bestDeviceCredential 返回当前额度最高的可用设备账号的凭证与 attestation 令牌。
+// 供「模型测试」等需要单次设备凭证调用的路径使用；无可用账号时返回可读的拒绝原因。
+func (s *Server) bestDeviceCredential(ctx context.Context) (attestation string, cred *upstream.DeviceCredential, err error) {
+	accounts, err := s.store.ListAuthorizedEnabledAccounts()
+	if err != nil || len(accounts) == 0 {
+		return "", nil, fmt.Errorf("未配置授权官网账号（设备登录凭证），无法调用模型")
+	}
+	candidates := make([]*store.Account, 0, len(accounts))
+	for _, a := range accounts {
+		if s.deviceIsExhausted(a.ID) {
+			continue
+		}
+		candidates = append(candidates, a)
+	}
+	if len(candidates) == 0 {
+		return "", nil, fmt.Errorf("所有设备账号当日额度已耗尽（北京时间 0 点恢复）")
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return deviceQuotaSortKey(candidates[i]) > deviceQuotaSortKey(candidates[j])
+	})
+	for _, acc := range candidates {
+		dc, cerr := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+		if cerr != nil {
+			logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, cerr)
+			continue
+		}
+		return s.attest.Token(ctx, dc), dc, nil
+	}
+	return "", nil, fmt.Errorf("所有设备账号的设备凭证解析失败")
 }
 
 // tryDeviceChatCompletion 尝试用已授权官网账号的设备凭证（DPoP + 指纹头）转发对话。
@@ -334,6 +283,13 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 					if upstream.ContentModerationRejected(apiErr.StatusCode, apiErr.Body) {
 						logger.Warnf("设备通道被上游内容审查拒绝（请求级，停止轮换）account=%s：需调整输入文本，换账号无效", acc.Email)
 					}
+					passthroughUpstreamError(w, apiErr)
+					return true, true, ""
+				}
+				// 网关级错误（如 503 model_unavailable + Retry-After）：与用哪把凭证无关，换账号无益，
+				// 立即透传并保留 Retry-After，让客户端按官方退避时长重试（u1s1-cli 1.3.1 同期服务端变更）。
+				if !upstream.CredentialScopedError(apiErr.StatusCode, apiErr.Body) {
+					logger.Warnf("设备通道网关级错误（停止轮换，透传）account=%s status=%d：%s", acc.Email, apiErr.StatusCode, truncate(apiErr.Body, 120))
 					passthroughUpstreamError(w, apiErr)
 					return true, true, ""
 				}
