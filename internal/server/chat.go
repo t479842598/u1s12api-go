@@ -160,6 +160,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 				lastErrBody = apiErr.Body
 				s.pool.ReportResult(ks.ID, apiErr.StatusCode, apiErr.Body)
 				logger.Warnf("chat 上游错误 key#%d status=%d body=%.200s", ks.ID, apiErr.StatusCode, apiErr.Body)
+				// 请求级错误（内容审查 / 未知模型 / 请求体非法）：换 Key 必然同样失败，立即透传。
+				// 与设备通道共用同一判据，避免两条通道口径分叉。
+				if upstream.RequestScopedError(apiErr.StatusCode, apiErr.Body) {
+					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
+						apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+					if upstream.ContentModerationRejected(apiErr.StatusCode, apiErr.Body) {
+						logger.Warnf("chat 被上游内容审查拒绝（请求级，不重试）key#%d：需调整输入文本，换 Key 无效", ks.ID)
+					}
+					passthroughUpstreamError(w, apiErr)
+					return
+				}
 				// 可重试：key 级故障（无效/额度尽/限流）→ 换下一把；每次失败都落请求记录便于排查。
 				if apiErr.StatusCode == 401 || apiErr.StatusCode == 402 || apiErr.StatusCode == 429 {
 					s.recordRequest(localKeyName, req.Model, ks.ID, req.Stream, started,
@@ -286,6 +297,17 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 					s.attest.Invalidate(cred)
 				}
 				s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+				// 请求级错误（内容审查 / 未知模型 / 请求体非法）：由请求体决定，换账号必然同样失败。
+				// 原先这里无条件 continue，一次 400 会打穿全部设备账号再回退 Key 池，
+				// 白烧额度、拉长延迟，并在官方风控里留下「同内容跨多账号重复请求」特征。
+				// 现在立即透传、停止轮换、不回退 Key 池（同一请求体，Key 池也必然失败）。
+				if upstream.RequestScopedError(apiErr.StatusCode, apiErr.Body) {
+					if upstream.ContentModerationRejected(apiErr.StatusCode, apiErr.Body) {
+						logger.Warnf("设备通道被上游内容审查拒绝（请求级，停止轮换）account=%s：需调整输入文本，换账号无效", acc.Email)
+					}
+					passthroughUpstreamError(w, apiErr)
+					return true
+				}
 				if upstream.QuotaSignal(apiErr.StatusCode, apiErr.Body) {
 					// 当日额度耗尽：标记该设备冷却，切到下一个有额度的账号。
 					s.markDeviceExhausted(acc.ID, upstream.NextBeijingMidnight(time.Now()))

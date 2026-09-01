@@ -257,6 +257,66 @@ func QuotaSignal(statusCode int, body string) bool {
 	return false
 }
 
+// ContentModerationRejected 识别上游模型厂商的「输入内容审查未通过」错误。
+//
+// 实测形态（阿里云 DashScope 风格，经 Gateway 透传，厂商名被网关打码）：
+//
+//	HTTP 400 {"error":{"message":"<400> ***.***.DataInspectionFailed: Input text
+//	          data may contain inappropriate content.",
+//	          "type":"data_inspection_failed","code":"data_inspection_failed",
+//	          "upstream_status":400}}
+//
+// 它审查的是**请求体里的文本**，与用哪把 Key / 哪个设备账号无关，因此对同一请求体
+// 是确定性的（见 RequestScopedError）。单独识别它是为了让日志与客户端错误信息
+// 能指出「换内容」而不是让人误查网络/额度。
+func ContentModerationRejected(statusCode int, body string) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "data_inspection_failed") ||
+		strings.Contains(lower, "datainspectionfailed") ||
+		strings.Contains(lower, "content_policy_violation") ||
+		strings.Contains(lower, "inappropriate content")
+}
+
+// RequestScopedError 判定「由请求内容决定、与凭证无关」的上游错误 —— 换 Key /
+// 换设备账号重试必然得到同样的结果，因此**必须立即停止轮换**、把上游错误原样透传。
+//
+// 为什么这是必须的（v0.9.1 生产实测踩坑）：设备通道原先对任何 APIError 都
+// continue 换下一个账号，于是一次内容审查 400 被放大成「N 个设备账号 + Key 池」
+// 共 N+1 次上游调用，后果是：
+//  1. 白烧多个账号的免费额度（每次重试都是真实计费的上游请求）；
+//  2. 客户端延迟成倍拉长（串行等待每个账号往返）；
+//  3. 最危险：在官方风控里形成「同一内容跨多账号短时间内重复请求」的特征，
+//     而 u1s1 v1.3.0 起「疑似非官方设备凭据代理会在后台累计风险证据，达到
+//     处置条件后自动封禁」，配合 08-30 公告「Token 不得接入第三方工具」，
+//     这种特征正是最容易被判为代理转发的模式。
+//
+// 判定口径：HTTP 400 一律视为请求级 —— 400 的语义就是「请求本身不合法」，
+// 而请求体在所有凭证之间完全相同，凭证不是变量。典型成员：内容审查
+// （data_inspection_failed）、未知模型（model_not_found）、请求体非法
+// （invalid_request_error）。
+//
+// 例外：额度类错误实测走 429（见 QuotaSignal），这里显式排除，避免上游哪天
+// 改口径把额度 400 也短路掉、导致该轮换账号时不轮换。
+func RequestScopedError(statusCode int, body string) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	if QuotaSignal(statusCode, body) {
+		return false
+	}
+	lower := strings.ToLower(body)
+	if strings.Contains(lower, "quota_exceeded") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "quota exhausted") ||
+		strings.Contains(lower, "余额不足") {
+		return false
+	}
+	return true
+}
+
 // NextBeijingMidnight 下一次北京时间 0 点。
 func NextBeijingMidnight(now time.Time) time.Time {
 	loc := time.FixedZone("CST", 8*3600)

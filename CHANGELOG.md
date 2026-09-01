@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.2 (2026-09-01)
+
+### 修复
+
+- **请求级上游错误不再跨凭证重试放大**：新增 `upstream.RequestScopedError()` 判定「由请求体决定、与凭证无关」的错误（HTTP 400，额度类除外），设备通道与 Key 通道共用该判据。命中即**停止轮换账号 / 不回退 Key 池**、把上游错误原样透传给客户端
+  - 触发场景（生产实测）：上游模型厂商内容审查 `data_inspection_failed` —— `***.***.DataInspectionFailed: Input text data may contain inappropriate content`（阿里云 DashScope 风格，厂商名被网关打码）
+  - 修复前行为：`tryDeviceChatCompletion` 对**任何** `APIError` 无条件 `continue`，一次 400 被打穿全部设备账号后再回退 Key 池 —— 实测一次客户端请求放大为 **4 次上游调用**（3 个设备账号 + 1 把 Key），日志表现为 08:45:26→08:47:57 同一错误跨 5 个凭证反复出现
+  - 危害：① 白烧多个账号的免费额度（每次重试都是真实计费的上游请求）；② 客户端延迟成倍拉长；③ 最危险的是在官方风控里形成「同一内容跨多账号短时间内重复请求」特征 —— 恰与 u1s1 v1.3.0「疑似非官方设备凭据代理后台累计风险证据、达条件自动封禁」及 08-30 公告「Token 不得接入第三方工具」相撞，是自我暴露的代理指纹
+  - 判定口径：400 一律视为请求级（请求体在所有凭证间完全相同，凭证不是变量）；额度类错误实测走 429，显式排除在外，避免上游改口径后该轮换时不轮换
+- 新增 `upstream.ContentModerationRejected()`：单独识别内容审查，日志明确提示「需调整输入文本，换账号无效」，避免运维误查网络/额度
+
+### 逆向核对（本次同步复查官网更新）
+
+- npm `u1s1-cli` 最新仍 **1.3.1**、官网更新记录顶部仍 v1.3.1 / Desktop App v0.1.9 / Gateway（均 2026-08-30）、公告最新仍 #6（08-30）→ **无新版本、请求头零变化**，v0.9.1 的指纹同步仍然有效
+- 真实网关端到端复验（device_id 655）：attestation 正常签发（payload `v=1 u=531 d=655`，TTL 168h，缓存命中 1µs）；带全部指纹头的真实 chat 返回 **429 额度不足**而非 401/403 → 网关接受客户端身份，仅额度耗尽，请求头方案未被封堵
+
+### 验证
+
+- 新增 12 项测试：`internal/upstream/errorclass_test.go`（`RequestScopedError` 表驱动 10 例覆盖内容审查/未知模型/非法请求体/额度 400/429/401/403/503/200 与 `ContentModerationRejected` 4 例）
+- `internal/server/request_scoped_test.go`：`TestRequestScopedErrorNoFanOut` 断言一次内容审查 400 只产生 **1 次**上游调用、其余账号 `total_requests=0`、不回退 Key 池、只落 1 条错误记录、且不误标账号冷却；`TestQuotaErrorStillRotates` 作对照，确保额度耗尽仍照旧冷却并轮换
+- **回归有效性已验证**：临时回退 `chat.go` 修复后该测试确实失败（`上游 chat 调用次数 = 4，期望 1`），证明能抓到该 bug 而非空跑
+- `go build ./...` + `go test ./... -count=1` 全绿；`pool.ReportResult` 复核确认 400 不触发 Key 禁用/冷却，无误伤
+
 ## v0.9.1 (2026-08-31)
 
 ### 变更
