@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.9.5 (2026-09-02)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.4.0**：`U1S1_VERSION` 默认值 1.3.1 → 1.4.0（`internal/config` 默认值 / `.env.example` / README / 设置页 placeholder）。`x-u1s1-version` 头随之上到 1.4.0
+
+### 逆向核对（1.4.0 vs 1.3.1）
+
+官网 09-01 发布 CLI 1.4.0。npm `latest`、官方 `/releases/LATEST` 均为 1.4.0。逐文件 diff 1.4.0 与 1.3.1 tarball：
+
+- **请求头集合零变化**：`authorization (DPoP)` / `x-u1s1-client` / `x-u1s1-version` / `x-u1s1-platform` / `x-u1s1-attestation` 均不变，**无新增请求头**。唯一实质差异是 `x-u1s1-version` 值变为 1.4.0
+- **SDK 不变**：1.4.0 内嵌 `@earendil-works/pi-coding-agent`、`pi-tui` 仍 0.84.4，openai SDK 仍 6.40.0 → `X-Stainless-Package-Version` 仍 6.40.0，UA / `X-Stainless-*` 不变
+- **attestation 刷新策略升级，但我们已对齐**：1.4.0 读 `client_attestation.expires_in`、临期 1 天预刷新、失败 30s 冷却、单飞、无 token 最多阻塞 4s；我们早已解析 `expires_in` + payload `exp` 双源并提前重签，语义一致
+- **config 新增 `freeEligible` / `deriveModelNote`**：仅 TUI 模型选择器展示「免费用量包可抵扣 / 不走免费包」提示，与请求头无关
+- 1.4.0 官方内容：CLI 新增 `/help` `/usage`（会话内查额度）、模型切换带价格提示、空目录首跑引导；Gateway 改进「额度提示与实际扣费对齐」（持有全模型包不再误判额度用尽）—— 属展示/提示侧，非新鉴权限制
+
+### 签到与限制复核（本次同步）
+
+- **签到规则不变**：每日打卡 200 万全模型加量包 + 连续打卡 30 天里程碑挑战
+- **限制无新增**：已有限制仍为 Token 仅限本站工具（违规封禁）、免费用量包覆盖部分模型；Gateway 09-01 是额度提示修正，不影响我们的配额判定（`QuotaSignal` 仍正确识别 `quota_exceeded`/`insufficient_quota`）
+
+### 验证
+
+- **真实网关端到端复验**：`x-u1s1-version: 1.4.0` 下设备凭证通道仍被接受 —— attestation 正常签发（payload `v=1 u=531 d=655`，TTL 168h，缓存命中 1µs），证明同步到 1.4.0 无风险
+- `go build ./...` + 前端 `npm run build` 成功
+
 ## v0.9.4 (2026-09-01)
 
 ### 变更
