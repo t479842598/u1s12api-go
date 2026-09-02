@@ -139,7 +139,7 @@ export default function SettingsPage() {
               className="w-40"
               value={version}
               onChange={(e) => setVersion(e.target.value)}
-              placeholder="1.4.0"
+              placeholder="1.4.1"
             />
             <Button
               variant="secondary"

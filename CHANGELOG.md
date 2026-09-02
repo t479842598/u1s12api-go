@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.6 (2026-09-02)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.4.1**：`U1S1_VERSION` 默认值 1.4.0 → 1.4.1（`internal/config` / `.env.example` / README / 设置页 placeholder / 服务器 `.env`）。`x-u1s1-version` 头随之上到 1.4.1
+
+### 逆向核对（1.4.1 vs 1.4.0）
+
+官网 09-02 发布 CLI 1.4.1（npm `latest`、官方 `/releases/LATEST` 均为 1.4.1）。逐文件 diff 1.4.1 与 1.4.0 tarball：
+
+- **请求头/鉴权零变化**：`device-auth.js`、`api.js` 与 1.4.0 **逐字节一致**；唯一差异在 `config.js` —— 内置兜底模型目录不再硬编码价格（`cost` 改为 `null` + `UNKNOWN_MODEL_COST`），属 CLI 内部 UI，与请求头无关
+- **SDK 不变**：deps 仍 pi-coding-agent/pi-tui 0.84.4、openai 6.40.0 → `X-Stainless-Package-Version` 不变
+- 1.4.1 官方内容：会话内公告触达（每 5 分钟静默查公告、对话内插 📢 提示）、模型价格只以服务端为准（网关目录拉取失败时只列模型名不显示可能过期的价格估算）、模块导入路径归一（无行为变化）
+
+### 签到与限制复核（本次同步）
+
+- **签到规则不变**：每日打卡 200 万全模型加量包 + 连续打卡 30 天里程碑挑战
+- **限制无新增**：已有限制仍为 Token 仅限本站工具（违规封禁）、免费用量包覆盖部分模型；无新增公告（顶部仍 08-30 的 Token 使用范围/违规处置说明）
+
+### 验证
+
+- `go build ./...` + 前端 `npm run build` 成功；arm64 产物部署后启动日志确认 `u1s1_version=1.4.1`
+
 ## v0.9.5 (2026-09-02)
 
 ### 变更
