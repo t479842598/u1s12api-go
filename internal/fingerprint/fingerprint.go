@@ -1,45 +1,59 @@
-// Package fingerprint 构造与官方 u1s1 CLI 一致的请求头指纹。
+// Package fingerprint 构造与官方客户端一致的请求头指纹。
 //
-// u1s1 CLI（pi-coding-agent 换皮）向 https://api.u1s1.io/v1 发起 chat/completions
-// 时由 OpenAI SDK v6.40.0 附带以下指纹头（逆向自 u1s1-cli 1.2.3 dist）：
+// 官方有两个发请求的入口，指纹只在两处不同：
 //
-//	Authorization: Bearer u1s1-xxx        （普通 u1s1- key 通道 / 只读兼容兜底）
+//	u1s1-cli（终端，npm u1s1-cli 1.4.1）      → x-u1s1-client: terminal
+//	u1s1 桌面客户端（app 0.1.9，内嵌 u1s1-cli 1.3.0 + Node 22.23.1）→ x-u1s1-client: desktop
+//
+// 桌面端不是另一个实现：它把 u1s1-cli 当库用（node_modules/u1s1-cli），
+// 经 `u1s1-cli/embed` 调 prepareWebEnv → ensureSigningProxy(cfg, "desktop", attestation)，
+// CLI 自己则传 fallbackClient="terminal"。device-auth.js 里
+// `clientSurface()` 的取值顺序是 U1S1_CLIENT 环境变量 → desktop → fallback。
+// 除 x-u1s1-client 之外两者请求头逐字节相同，本项目对齐**桌面客户端**。
+//
+// chat/completions（OpenAI SDK v6.40.0 经本地签名代理转发）：
+//
+//	Authorization: DPoP u1s1d-xxx     （设备凭证通道；普通 u1s1- key 通道为 Bearer）
+//	dpop: <header.payload.sig>        （每请求新签，见 upstream/device.go）
 //	User-Agent: pi ({os.platform()} {os.release()}; {os.arch()})
-//	    例: pi (darwin 24.6.0; arm64)
-//	x-u1s1-version: 1.2.3          ← 网关按此识别客户端版本
-//	X-Stainless-Lang: js
-//	X-Stainless-Package-Version: 6.40.0
-//	X-Stainless-OS: MacOS|Linux|Windows   （normalizePlatform 映射）
-//	X-Stainless-Arch: arm64|x64
-//	X-Stainless-Runtime: node
-//	X-Stainless-Runtime-Version: v22.x.x  （便携包 Node ≥22.19）
-//	X-Stainless-Retry-Count: 0
-//
-// 设备凭证模式（u1s1 login 浏览器批准，u1s1d- token + DPoP）下，官方客户端签名代理还会附加：
-//
-//	Authorization: DPoP u1s1d-xxx
-//	dpop: <header.payload.sig>   （每请求新签，见 upstream/device.go）
-//	x-u1s1-client: terminal|web|desktop|cloud
+//	    例: pi (darwin 25.6.0; arm64)  ← pi-ai 的 getPiUserAgent()，覆盖 SDK 默认的
+//	                                      "OpenAI/JS 6.40.0"
+//	x-u1s1-version: 1.4.1             ← 网关按此识别客户端版本
+//	x-u1s1-client: desktop|terminal
 //	x-u1s1-platform: {os.platform()}-{os.arch()}   例: darwin-arm64
-//	x-u1s1-attestation: <token>  （1.3.0 新增：网关经 /v1/models 签发的客户端证明，
-//	                              绑定 user+device、7 天有效，无法自造，见 upstream/attestation.go）
-//
-// 注意：x-u1s1-client / x-u1s1-platform / DPoP 仅设备凭证模式使用，普通 u1s1- key
-// 通道不发这三个头（官方 authorizedFetch 的 api_key 兜底分支只发 Bearer + x-u1s1-version）。
-//	X-Stainless-Lang: js
-//	X-Stainless-Package-Version: 6.40.0
-//	X-Stainless-OS: MacOS|Linux|Windows   （normalizePlatform 映射）
-//	X-Stainless-Arch: arm64|x64
+//	x-u1s1-attestation: <token>       （1.3.0 新增：网关经 /v1/models 签发的客户端证明，
+//	                                    绑定 user+device、7 天有效，无法自造，见 upstream/attestation.go）
+//	X-Stainless-Lang: js              ← 以下 7 个由 openai SDK 的 getPlatformHeaders()
+//	X-Stainless-Package-Version: 6.40.0    与 buildHeaders() 自动附加，签名代理原样转发
+//	X-Stainless-OS: MacOS|Linux|Windows    （normalizePlatform 映射）
+//	X-Stainless-Arch: arm64|x64            （normalizeArch 映射）
 //	X-Stainless-Runtime: node
-//	X-Stainless-Runtime-Version: v22.x.x  （便携包 Node ≥22.19）
+//	X-Stainless-Runtime-Version: v22.x.x   （实际运行的 Node 版本）
 //	X-Stainless-Retry-Count: 0
+//	Accept: application/json / Accept-Language: * / Sec-Fetch-Mode: cors
+//	    （undici fetch 的固定产物，网关不参与判定，本项目不发）
 //
-// 辅助端点（/models /me 等，CLI 用裸 fetch 调用）只带 authorization +
-// x-u1s1-version，不带 UA / X-Stainless-*。AuxHeaders 与之一致。
+// 辅助端点（/models /me、/auth/device/*）用裸 fetch 调用，只带
+// authorization + x-u1s1-version（auth 端点连 x-u1s1-version 都没有，只有 content-type），
+// 但**一定带 User-Agent**：
+//
+//	桌面客户端 → user-agent: undici
+//	    桌面端的 Next.js server 在 instrumentation 阶段先跑 pi-coding-agent 的
+//	    configureHttpDispatcher()，它调用 undici.install() 把 globalThis.fetch 换成
+//	    独立 undici 8.5.0 的实现，之后所有裸 fetch（含 fetchModels/fetchMe）都走 undici。
+//	CLI      → user-agent: node（1.4.1 不装 dispatcher，用 Node 内置 fetch）
+//
+// AuxHeaders / DeviceMe / DeviceModels 与桌面端一致发 undici。
 //
 // 本包按「档案」成套输出上述头，保证 UA 与 X-Stainless-* 自洽；
 // 档案持久化到 data/fingerprint.json —— 同一部署稳定复用同一身份，
 // 避免每次重启都变成"新设备"。可用 FINGERPRINT_PROFILE 强制指定档案。
+//
+// 以上取值来自 2026-09-03 对 u1s1-cli 1.4.1（npm tarball）与桌面客户端 0.1.9
+// （u1s1_0.1.9_aarch64.dmg 内 node_modules/u1s1-cli 1.3.0 + Node 22.23.1）的静态核对，
+// 并用「本地 mock 网关 + 官方 ensureSigningProxy + 官方 pi-ai openai-completions 客户端」
+// 实跑抓包逐头验证。复现脚本：docs/repro/desktop-fingerprint-capture.mjs
+// （每次官方 CLI / 桌面端发版后跑一遍，逐头比对下面的取值是否仍然成立）。
 package fingerprint
 
 import (
@@ -93,11 +107,24 @@ var Profiles = []Profile{
 	},
 }
 
-// OpenAI SDK 版本号（u1s1-cli 1.2.3 内嵌 @earendil-works/pi-ai 0.84.3 → openai 6.40.0）。
+// OpenAI SDK 版本号（u1s1-cli 1.4.1 与桌面端 0.1.9 内嵌的 pi-ai 0.84.4 → openai 6.40.0）。
 const SDKPackageVersion = "6.40.0"
 
-// ClientSurface x-u1s1-client 头：u1s1-cli 终端运行默认 terminal（可被 U1S1_CLIENT 覆盖）。
-const ClientSurface = "terminal"
+// ClientSurface x-u1s1-client 头。官方取值：
+//
+//	U1S1_CLIENT 环境变量显式指定（terminal|web|desktop|cloud）优先；
+//	否则桌面客户端（web.js 传 fallbackClient="desktop"）发 desktop，
+//	CLI TUI（index.js 传 "terminal"）发 terminal。
+//
+// 本项目对齐桌面客户端 → desktop。
+const ClientSurface = "desktop"
+
+// UndiciUserAgent 辅助端点（/models /me、/auth/device/*）的 User-Agent。
+// 桌面客户端的 Next.js server 启动时执行 undici.install()，把 globalThis.fetch
+// 换成独立 undici 8.5.0 的实现，这些裸 fetch 请求因此带 user-agent: undici。
+// （CLI 不装 dispatcher，同一请求是 user-agent: node。）
+// 关键是我们**必须发一个 UA**：Go 默认发 Go-http-client/1.1，那是明显的非官方指纹。
+const UndiciUserAgent = "undici"
 
 // ClientPlatform x-u1s1-platform 头：node os.platform() + process.arch，如 darwin-arm64。
 func ClientPlatform(p Profile) string {
@@ -214,11 +241,12 @@ func (m *Manager) ChatHeaders(apiKey, cliVersion string) map[string]string {
 	}
 }
 
-// AuxHeaders 构造辅助端点（/models、/me 等）的头 —— 与 CLI 的 api.js 保持一致：
-// 仅 authorization + x-u1s1-version。
+// AuxHeaders 构造辅助端点（/models、/me 等）的头 —— 与官方 fetchModels/fetchMe 一致：
+// authorization + x-u1s1-version + undici UA（裸 fetch 不覆盖 UA 时的运行时默认值）。
 func AuxHeaders(apiKey, cliVersion string) map[string]string {
 	return map[string]string{
 		"authorization":  "Bearer " + apiKey,
 		"x-u1s1-version": cliVersion,
+		"user-agent":     UndiciUserAgent,
 	}
 }

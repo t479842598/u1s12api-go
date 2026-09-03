@@ -96,7 +96,56 @@ func TestManagerPersistence(t *testing.T) {
 
 func TestAuxHeaders(t *testing.T) {
 	h := AuxHeaders("u1s1-k", "1.2.3")
-	if len(h) != 2 {
-		t.Errorf("辅助端点应只有 authorization + x-u1s1-version，得到 %d 个头", len(h))
+	// 官方 fetchModels/fetchMe 只显式设 x-u1s1-version，authorization 由 authorizedFetch 补，
+	// UA 是裸 fetch 的运行时默认值（桌面端 undici.install 后→ undici）。
+	want := map[string]string{
+		"authorization":  "Bearer u1s1-k",
+		"x-u1s1-version": "1.2.3",
+		"user-agent":     "undici",
+	}
+	if len(h) != len(want) {
+		t.Errorf("辅助端点头数 = %d, 期望 %d (%v)", len(h), len(want), h)
+	}
+	for k, v := range want {
+		if h[k] != v {
+			t.Errorf("辅助头 %s = %q, 期望 %q", k, h[k], v)
+		}
+	}
+	// 辅助端点不发 X-Stainless-*（只属于 SDK 发的 chat 请求）。
+	for k := range h {
+		if strings.HasPrefix(k, "X-Stainless") {
+			t.Errorf("辅助端点不应带 %s", k)
+		}
+	}
+}
+
+// TestClientSurfaceIsDesktop 对齐桌面客户端：ensureSigningProxy(cfg, "desktop", ...)。
+// CLI TUI 才发 terminal（v0.9.6 及之前我们发的是 terminal）。
+func TestClientSurfaceIsDesktop(t *testing.T) {
+	if ClientSurface != "desktop" {
+		t.Errorf("ClientSurface = %q, 期望 desktop", ClientSurface)
+	}
+}
+
+// TestUndiciUserAgent 辅助端点 UA 必须是 undici，不能退化成 Go-http-client/1.1。
+func TestUndiciUserAgent(t *testing.T) {
+	if UndiciUserAgent != "undici" {
+		t.Errorf("UndiciUserAgent = %q, 期望 undici", UndiciUserAgent)
+	}
+}
+
+// TestChatHeadersNoGoDefaultUA chat 指纹头必须自带 UA（pi (...)），
+// 任何路径都不能让 Go 的默认 UA 泄到上游。
+func TestChatHeadersNoGoDefaultUA(t *testing.T) {
+	m, err := NewManager(t.TempDir()+"/fp.json", "linux-x64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := m.ChatHeaders("u1s1-k", "1.4.1")
+	if !strings.HasPrefix(h["user-agent"], "pi (") {
+		t.Errorf("chat UA = %q, 期望 pi (...)", h["user-agent"])
+	}
+	if h["x-u1s1-version"] != "1.4.1" {
+		t.Errorf("x-u1s1-version = %q", h["x-u1s1-version"])
 	}
 }

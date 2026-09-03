@@ -799,7 +799,7 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// 用一个无效 key 探测可达性：能拿到 401 说明网络通。
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.u1s1.io/v1/models", nil)
-	for k, v := range map[string]string{"authorization": "Bearer probe", "x-u1s1-version": "probe"} {
+	for k, v := range map[string]string{"authorization": "Bearer probe", "x-u1s1-version": "probe", "user-agent": fingerprint.UndiciUserAgent} {
 		req.Header.Set(k, v)
 	}
 	resp, perr := testCli.RawDo(req)

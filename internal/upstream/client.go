@@ -145,9 +145,9 @@ func (c *Client) do(ctx context.Context, method, path string, headers map[string
 		req.Header.Set(k, v)
 	}
 	if req.Header.Get("User-Agent") == "" {
-		// 对齐 Node fetch（undici）：辅助端点不发 User-Agent。
-		// Go 会默认补 "Go-http-client/1.1"，显式置空才能抑制。
-		req.Header.Set("User-Agent", "")
+		// 兼容兜底：调用方忘了给 UA 时补上官方辅助端点的运行时 UA（桌面端 undici）。
+		// Go 会默认补 "Go-http-client/1.1"，那是明显的非官方指纹，必须覆盖。
+		req.Header.Set("User-Agent", fingerprint.UndiciUserAgent)
 	}
 	if body != nil && req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")

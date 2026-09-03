@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.9.7 (2026-09-03)
+
+### 变更
+
+- **请求头指纹改为对齐官方桌面客户端**：`x-u1s1-client` 由 `terminal` 改为 **`desktop`**（`internal/fingerprint`）。官方取值规则是 `U1S1_CLIENT` 环境变量 → 桌面端 `desktop` → 入口 fallback；桌面客户端（app 0.1.9）经 `u1s1-cli/embed` 调 `ensureSigningProxy(cfg, "desktop", attestation)`，只有 CLI TUI 才传 `"terminal"`
+- **辅助端点补 `user-agent: undici`**：`/v1/me`、`/v1/models`、`/auth/device/start`、`/auth/device/poll` 此前不设置 UA，Go 会发 `Go-http-client/1.1`（明显的非官方指纹）。现在统一发 `undici` —— 桌面端 Next.js server 的 `instrumentation.js` 启动时执行 pi-coding-agent 的 `configureHttpDispatcher()` → `undici.install()`，把 `globalThis.fetch` 换成独立 undici 8.5.0，之后所有裸 fetch 都带这个 UA（CLI 不装 dispatcher，同一请求是 `user-agent: node`）
+- **DPoP 证明逐字节对齐官方 `device-auth.js`**（header 段的 JSON 是 ES256 签名输入的一部分，键序不同就 base64url 出不同的头段、签名也随之不同）：
+  - `DeviceJWK.MarshalJSON()` 固定为 Node `exportKey("jwk")` 的键序 —— 公钥 `{"key_ops":["verify"],"ext":true,"kty":"EC","x":…,"y":…,"crv":"P-256"}`、私钥同序再追加 `"d"`；`/auth/device/start` 提交的 `public_jwk` 与落库的密钥 JSON 一并跟随
+  - payload 改为显式拼 JSON 字符串，键序固定 `jti, htm, htu, iat, ath`（原先用 `map[string]any`，`json.Marshal` 会按字母排成 `ath` 在前）
+  - `jti` 由 `randomHex(16)` 改为 `uuidHex()` —— 去掉连字符的 UUID v4（32 位小写 hex，第 13 位固定 `4`、第 17 位为变体位 `8|9|a|b`），对齐官方 `randomUUID().replace(/-/g,"")`
+  - 移除不再使用的 `jsonString()`、`randomHex()`、`jwkToJSON()`
+- **管理后台「上游连通性」探测**也补上 `user-agent: undici`，不再以 Go 默认 UA 打真实网关
+
+### 逆向核对（桌面客户端 0.1.9 vs u1s1-cli 1.4.1）
+
+解包两个官方发行版逐文件核对（`https://u1s1.io/releases/app/LATEST` = 0.1.9；npm `u1s1-cli` latest 仍是 1.4.1，与 v0.9.6 同步的版本一致，无需再动 `U1S1_VERSION`）：
+
+- **桌面端 = Tauri 壳 + 自带 Node 22.23.1 跑 pi-web 0.8.7（Next.js standalone）**，`Contents/Resources/resources/server/node_modules/u1s1-cli` 就是 **1.3.0** —— 它把 CLI 当库用，`device-auth.js` 的 `dpopHeaders()` 与 1.4.1 逐字节相同（1.3.0→1.4.1 只加了请求体上限/attestation 自愈刷新，签名构造未变）
+- **两处真实差异**：`x-u1s1-client`（desktop vs terminal）与裸 fetch 的 UA（undici vs node，成因见上）
+- **`X-Stainless-*` 不能删**：桌面端 chat 仍由 pi-ai 的 `openai-completions`（openai SDK 6.40.0）发出，SDK 的 `getPlatformHeaders()` 无条件附加这 7 个头，签名代理的 `requestHeaders()` 只剔除 `host/connection/content-length/authorization/dpop`，其余原样转发 —— 实测抓包确认桌面端照发，因此本次**保留**这些头（与「桌面端不发 X-Stainless-*」的推测相反，已用证据否定）
+- **chat 的 UA 是 `pi (…)` 不是 `undici`**：pi-ai `createClient()` 用 `defaultHeaders` 显式覆盖 SDK 默认的 `OpenAI/JS 6.40.0`；`undici` 只出现在裸 fetch 的辅助端点
+- **`x-u1s1-version` 保持 1.4.1**：桌面端 0.1.9 因内嵌 1.3.0 而发 1.3.0，但网关用这个头做旧版升级提示，报旧版本反而更容易被追加提示；1.4.1 是当前最新，与 desktop surface 的组合在官方 App 升级内嵌 CLI 后即自然出现
+
+### 新增
+
+- **`docs/repro/desktop-fingerprint-capture.mjs`**：可复跑的逐头核对脚本 —— 起本地 mock 网关，加载**官方自己的** `ensureSigningProxy` + 官方 pi-ai 客户端 + 官方 `undici.install()`，打印官方真实会发的每一个头（含 DPoP header/payload 解码），不碰真实网关、不消耗额度。以后官方发版跑一遍即可对头
+
+### 验证
+
+- **抓包核对**：脚本输出桌面端 chat = `user-agent: pi (darwin 25.6.0; arm64)` + `x-u1s1-client: desktop` + `x-u1s1-platform: darwin-arm64` + 7 个 `x-stainless-*` + `x-u1s1-attestation` + DPoP；`/v1/models` = `user-agent: undici` 且无 `x-stainless-*`；DPoP header 段 jwk 键序 `key_ops, ext, kty, x, y, crv`、payload 键序 `jti, htm, htu, iat, ath`、`jti` 为 UUID v4 形状
+- **单元测试**：`go test ./...` 全绿。新增 `TestDeviceChatSurfaceIsDesktop`、`TestDeviceChatKeepsStainlessHeaders`、`TestAuxEndpointsSendUndiciUserAgent`、`TestDeviceLoginRequestFingerprint`、`TestDpopProofStructureMatchesOfficial`（含用公钥对 DPoP 做 ES256 验签，确认换键序后签名仍自洽）、`TestDeviceJWKMarshalKeyOps`；`TestAuxHeaders` 与 `TestModelsEndpoint` 的旧断言（辅助端点不发 UA）按实测改正
+- **真实网关端到端**（生产库设备凭证，账号 tanglidong686@gmail.com / device 656）：新 DPoP 结构下 `/v1/models` 仍正常签发 attestation（payload `v=1 u=463 d=656`，TTL 168h，缓存命中 1µs），`U1S1_REAL_CHAT=1` 的真实 chat **HTTP 200** —— 网关接受 `x-u1s1-client: desktop` + 新签名结构，且对已按旧键序注册的设备（存的公钥 JWK 无 `key_ops`/`ext`）不冲突
+
+
 ## v0.9.6 (2026-09-02)
 
 ### 变更

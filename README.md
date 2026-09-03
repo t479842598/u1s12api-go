@@ -57,6 +57,31 @@ open http://127.0.0.1:8080/admin/
 
 选择 `auto` 时，首次启动随机选取一个档案并持久化到 `data/fingerprint.json`。
 
+### 对齐的是哪个官方客户端
+
+官方有两个发请求的入口，**只有两处差异**，本项目对齐桌面客户端：
+
+| 项 | 桌面客户端 0.1.9 | u1s1-cli 1.4.1 | 本项目 |
+|---|---|---|---|
+| `x-u1s1-client` | `desktop` | `terminal` | `desktop` |
+| 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `undici` | `node` | `undici` |
+| chat UA / `X-Stainless-*` / `x-u1s1-platform` / DPoP 结构 | 相同 | 相同 | 已对齐 |
+
+桌面客户端不是另一套实现：它把 u1s1-cli 当库用（`node_modules/u1s1-cli` 1.3.0 + 自带 Node 22.23.1），
+经 `u1s1-cli/embed` 调 `ensureSigningProxy(cfg, "desktop", attestation)`；CLI 自己传 `"terminal"`。
+`undici` 这个 UA 则来自桌面端 Next.js server 的 `instrumentation.js`：它先跑 pi-coding-agent 的
+`configureHttpDispatcher()` → `undici.install()`，把 `globalThis.fetch` 换成独立 undici 8.5.0，
+之后所有裸 fetch 都带 `user-agent: undici`。
+
+DPoP 证明与官方逐字节对齐（header 段的 JSON 是 ES256 签名输入的一部分）：
+
+- header 段 jwk 键序 = Node `exportKey("jwk")` 的 `key_ops, ext, kty, x, y, crv`
+- payload 段键序 = `jti, htm, htu, iat, ath`（Go 的 map 会被按字母排序，故显式拼 JSON）
+- `jti` = 去掉连字符的 UUID v4（32 位小写 hex，第 13 位为 `4`、第 17 位为 `8|9|a|b`）
+
+逐头核对与复现：`docs/repro/desktop-fingerprint-capture.mjs`（本地 mock 网关 + 官方签名代理，
+不碰真实网关、不消耗额度；每次官方发版后跑一遍）。
+
 ## 项目结构
 
 ```
@@ -65,7 +90,7 @@ u1s12api-go/
 ├── internal/
 │   ├── config/                # .env 加载/热写回
 │   ├── logging/               # 分级日志 + 内存环形缓冲
-│   ├── fingerprint/           # 请求头指纹生成（对齐官方 CLI）
+│   ├── fingerprint/           # 请求头指纹生成（对齐官方桌面客户端）
 │   ├── upstream/              # 上游 HTTP 客户端 + Key 池轮询
 │   ├── server/                # 路由 / 管理 API / 对话转发
 │   └── store/                 # SQLite 持久化（modernc，无 CGO）

@@ -1,9 +1,12 @@
 // Package upstream 官方设备凭证（u1s1d- + DPoP ES256 签名）客户端。
 //
 // 背景：U1S1 官网「仅限 u1s1 客户端使用」的加量包（login_checkin / new_user）
-// 只有用官方客户端身份调用才消耗。官方 CLI 用「设备登录」拿到 u1s1d- 设备凭证，
-// 之后每个请求用 RFC 9449 DPoP（ES256）签名 + 完整客户端指纹头，网关才识别为官方客户端。
-// 本文件实现同样的认证，供 u1s12api-go 消耗这批加量包。
+// 只有用官方客户端身份调用才消耗。官方客户端（CLI / 桌面端）用「设备登录」拿到
+// u1s1d- 设备凭证，之后每个请求用 RFC 9449 DPoP（ES256）签名 + 完整客户端指纹头，
+// 网关才识别为官方客户端。本文件实现同样的认证，供 u1s12api-go 消耗这批加量包。
+//
+// 指纹与请求头对齐的是**桌面客户端**（app 0.1.9，内嵌 u1s1-cli 1.3.0 + Node 22.23.1），
+// 逐项取值与差异说明见 internal/fingerprint 包注释。
 //
 // 设备登录流程（与官方 login.js 对齐）：
 //   POST {origin}/auth/device/start  提交公钥 → {verify_url, poll_secret, interval, expires_in}
@@ -19,25 +22,67 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 )
 
-// DeviceJWK 一个 EC P-256 密钥（JWK 表示）。JSON 与官方 device-auth.js 一致。
+// DeviceJWK 一个 EC P-256 密钥（JWK 表示）。
+//
+// 序列化顺序由 MarshalJSON 固定为官方客户端（Node webcrypto exportKey("jwk")）的键序：
+//
+//	公钥 {"key_ops":["verify"],"ext":true,"kty":"EC","x":...,"y":...,"crv":"P-256"}
+//	私钥 {"key_ops":["sign"],"ext":true,"kty":"EC","x":...,"y":...,"crv":"P-256","d":...}
+//
+// 这不是可有可无的装饰：DPoP 头的 JSON 是 ES256 签名输入的一部分，键序不同
+// 就会 base64url 出不同的 header 段（签名也跟着变），网关只要对 header 段做过哈希/采样
+// 就能区分出我们。struct 字段顺带保留是为了可读性，真正的输出顺序看 MarshalJSON。
 type DeviceJWK struct {
 	Kty string `json:"kty"`
 	Crv string `json:"crv"`
 	X   string `json:"x"`
 	Y   string `json:"y"`
 	D   string `json:"d,omitempty"` // 仅私钥
+}
+
+// MarshalJSON 按官方键序输出 JWK（含 Node 导出的 key_ops / ext）。
+// 所有序列化路径（/auth/device/start 的 public_jwk、data 目录里的设备密钥、
+// DPoP 头里的 jwk）都经这里，保证与官方逐字节一致。
+func (j DeviceJWK) MarshalJSON() ([]byte, error) {
+	keyOps := `"verify"`
+	if j.D != "" {
+		keyOps = `"sign"`
+	}
+	parts := []string{
+		`"key_ops":[` + keyOps + `]`,
+		`"ext":true`,
+		`"kty":` + jsonQuote(j.Kty),
+		`"x":` + jsonQuote(j.X),
+		`"y":` + jsonQuote(j.Y),
+		`"crv":` + jsonQuote(j.Crv),
+	}
+	if j.D != "" {
+		parts = append(parts, `"d":`+jsonQuote(j.D))
+	}
+	return []byte("{" + strings.Join(parts, ",") + "}"), nil
+}
+
+// jsonQuote 把字符串编成带引号的 JSON 字面量（官方用 JSON.stringify，字段顺序显式可控）。
+func jsonQuote(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil { // string 实际上不会序列化失败，回退只为不 panic
+		return `""`
+	}
+	return string(b)
 }
 
 // DeviceClient 用设备凭证访问上游网关。
@@ -134,22 +179,33 @@ func dpopHtu(raw string) string {
 
 // dpopHeaders 构造某请求的 DPoP 签名头（authorization + dpop）。
 // 每个请求都要新签名（jti/iat 唯一）。
+//
+// 与官方 device-auth.js 的 dpopHeaders() 逐字段对齐（CLI 1.3.0/1.4.1 与桌面端同一份代码）：
+//
+//	header  = JSON.stringify({typ, alg, jwk: devicePublicJwk})
+//	payload = JSON.stringify({jti, htm, htu, iat, ath})
+//	jti     = randomUUID().replace(/-/g, "")
+//
+// header 里 jwk 的键序是 Node 导出顺（key_ops, ext, kty, x, y, crv），见 DeviceJWK.MarshalJSON。
+// payload 官方用字面量对象，键序固定 jti, htm, htu, iat, ath；Go 的 map[string]any 会被
+// json.Marshal 按字母排（ath 在前），签名输入就变了，所以这里用显式 JSON 字符串。
+// jti 是去掉连字符的 UUID v4（见 uuidHex）。
 func dpopHeaders(deviceToken string, pubJwk, privJWK *DeviceJWK, method, rawURL string) (map[string]string, error) {
 	priv, err := jwkToECPrivate(privJWK)
 	if err != nil {
 		return nil, err
 	}
-	header := b64url([]byte(fmt.Sprintf(`{"typ":"dpop+jwt","alg":"ES256","jwk":%s}`, jsonString(pubJwk))))
-	athHash := sha256.Sum256([]byte(deviceToken))
-	payloadObj := map[string]any{
-		"jti": randomHex(16),
-		"htm": strings.ToUpper(method),
-		"htu": dpopHtu(rawURL),
-		"iat": time.Now().Unix(),
-		"ath": b64url(athHash[:]),
+	pubJSON, err := json.Marshal(pubJwk)
+	if err != nil {
+		return nil, err
 	}
-	payloadJSON, _ := json.Marshal(payloadObj)
-	payload := b64url(payloadJSON)
+	header := b64url([]byte(`{"typ":"dpop+jwt","alg":"ES256","jwk":` + string(pubJSON) + `}`))
+	athHash := sha256.Sum256([]byte(deviceToken))
+	payload := b64url([]byte(`{"jti":` + jsonQuote(uuidHex()) +
+		`,"htm":` + jsonQuote(strings.ToUpper(method)) +
+		`,"htu":` + jsonQuote(dpopHtu(rawURL)) +
+		`,"iat":` + strconv.FormatInt(time.Now().Unix(), 10) +
+		`,"ath":` + jsonQuote(b64url(athHash[:])) + `}`))
 	signingInput := header + "." + payload
 	digest := sha256.Sum256([]byte(signingInput))
 	r, s, err := ecdsa.Sign(rand.Reader, priv, digest[:])
@@ -161,11 +217,6 @@ func dpopHeaders(deviceToken string, pubJwk, privJWK *DeviceJWK, method, rawURL 
 		"authorization": "DPoP " + deviceToken,
 		"dpop":          header + "." + payload + "." + sig,
 	}, nil
-}
-
-func jsonString(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }
 
 // rawSignature 把 ECDSA (r,s) 编码为 JWS ES256 所需的固定宽度 R||S 拼接（IEEE P1363）。
@@ -180,16 +231,15 @@ func rawSignature(r, s *big.Int, bits int) []byte {
 	return out
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x", b)
-}
-
-// jwkToJSON 把 JWK 结构体序列化为 JSON 字符串。
-func jwkToJSON(jwk *DeviceJWK) (string, error) {
-	b, err := json.Marshal(jwk)
-	return string(b), err
+// uuidHex 生成 UUID v4 并去掉连字符 —— 对齐官方 jti 的 randomUUID().replace(/-/g, "")。
+// 32 位小写 hex，第 13 位固定为版本号 4，第 17 位为变体位（8|9|a|b）。
+// 与随机 hex 的区别就在那两个半字节：官方那里有固定值，纯随机 hex 没有。
+func uuidHex() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return hex.EncodeToString(b[:])
 }
 
 // parseJWK 从 JSON 字符串解析 JWK。
@@ -338,8 +388,9 @@ func (c *DeviceClient) postJSON(ctx context.Context, u string, body any) ([]byte
 		return nil, err
 	}
 	req.Header.Set("content-type", "application/json")
-	// 抑制 Go 默认 User-Agent（与官方 CLI 行为一致，auth 端点不发 UA）
-	req.Header.Set("User-Agent", "")
+	// 官方设备登录用裸 fetch，不覆盖 UA：桌面端（undici.install 后）发 undici，CLI 发 node。
+	// 本项目对齐桌面客户端；必须显式设置，否则 Go 会发 Go-http-client/1.1。
+	req.Header.Set("User-Agent", fingerprint.UndiciUserAgent)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -401,8 +452,10 @@ func (c *DeviceClient) DeviceMe(ctx context.Context, account *DeviceCredential) 
 	if err != nil {
 		return nil, err
 	}
-	// 官方 fetchMe 带 x-u1s1-version（authorizedFetch 的 init.headers 里显式设置）。
+	// 官方 fetchMe 带 x-u1s1-version（authorizedFetch 的 init.headers 里显式设置），
+	// UA 是裸 fetch 的运行时默认值（桌面端 undici.install 后→ undici）。
 	headers["x-u1s1-version"] = c.clientVersion()
+	headers["user-agent"] = fingerprint.UndiciUserAgent
 	resp, err := c.doDevice(ctx, http.MethodGet, "/me", headers, nil)
 	if err != nil {
 		return nil, err
@@ -447,7 +500,8 @@ const maxAttestationTokenLen = 1024
 
 // DeviceModels 用设备凭证调 GET /v1/models，取回网关签发的客户端证明令牌。
 //
-// 与官方 fetchModels 一致：只带 authorization(DPoP) + x-u1s1-version，不带 UA / X-Stainless-*。
+// 与官方 fetchModels 一致：只带 authorization(DPoP) + x-u1s1-version + 裸 fetch 的运行时
+// UA（桌面端 undici.install 后→ undici），不带 X-Stainless-*（那些头只属于 SDK 发的 chat 请求）。
 // 令牌是**按设备签发**的（payload 含 u=user id、d=device_id），无法伪造或跨账号复用，
 // 且每次调用都会重新签发（nonce/exp 变化），因此必须按账号分别获取并缓存。
 func (c *DeviceClient) DeviceModels(ctx context.Context, account *DeviceCredential) (*DeviceModelsResult, error) {
@@ -457,6 +511,7 @@ func (c *DeviceClient) DeviceModels(ctx context.Context, account *DeviceCredenti
 		return nil, err
 	}
 	headers["x-u1s1-version"] = c.clientVersion()
+	headers["user-agent"] = fingerprint.UndiciUserAgent
 	resp, err := c.doDevice(ctx, http.MethodGet, "/models", headers, nil)
 	if err != nil {
 		return nil, err
@@ -541,7 +596,12 @@ func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential
 	for k, v := range dp {
 		headers[k] = v
 	}
-	// 追加客户端指纹头（与官方 CLI 1.2.3 签名代理一致：设备凭证模式附加 x-u1s1-client/x-u1s1-platform）。
+	// 追加客户端指纹头（与官方签名代理一致：代理把本地 SDK 请求头原样转发，
+	// 再补 x-u1s1-client / x-u1s1-version / x-u1s1-platform / x-u1s1-attestation）。
+	// X-Stainless-* 开套必须保留：它们由 openai SDK v6.40.0 的 getPlatformHeaders() 自动附加，
+	// 而两个官方入口（CLI TUI 与桌面端 agent server）都用 pi-ai 的 openai-completions 发 chat，
+	// 签名代理的 requestHeaders() 只剔除 host/connection/content-length/authorization/dpop。
+	// 2026-09-03 用官方 ensureSigningProxy + 官方 pi-ai 客户端实跑抓包确认桌面端发这 7 个头。
 	p := c.currentProfile()
 	headers["user-agent"] = fingerprint.UserAgent(p)
 	headers["x-u1s1-version"] = c.clientVersion()

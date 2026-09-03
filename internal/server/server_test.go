@@ -137,7 +137,7 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 	}
 	checks := map[string]string{
 		"X-U1s1-Version":              "1.2.3",
-		"X-U1s1-Client":               "terminal",
+		"X-U1s1-Client":               "desktop", // 对齐桌面客户端（CLI 才是 terminal）
 		"X-U1s1-Platform":             "linux-x64",
 		"User-Agent":                  "pi (linux 6.8.0-45-generic; x64)",
 		"X-Stainless-Lang":            "js",
@@ -219,9 +219,16 @@ func TestModelsEndpoint(t *testing.T) {
 		if r.URL.Path != "/models" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("x-u1s1-version") == "" || r.Header.Get("User-Agent") != "" {
-			// 辅助端点只带 authorization+x-u1s1-version（不带 UA）
-			t.Errorf("辅助端点不应带 UA，实际 UA=%q", r.Header.Get("User-Agent"))
+		if r.Header.Get("x-u1s1-version") == "" {
+			t.Errorf("辅助端点应带 x-u1s1-version")
+		}
+		// 辅助端点是裸 fetch：只带 authorization + x-u1s1-version + 运行时 UA。
+		// 桌面客户端（undici.install 后）发 undici；绝不能漏 Go-http-client/1.1。
+		if got := r.Header.Get("User-Agent"); got != "undici" {
+			t.Errorf("辅助端点 UA = %q, 期望 undici", got)
+		}
+		if got := r.Header.Get("X-Stainless-Lang"); got != "" {
+			t.Errorf("辅助端点不应带 X-Stainless-*, 实际 %q", got)
 		}
 		fmt.Fprint(w, validUpstreamModelsResp)
 	})
