@@ -54,6 +54,20 @@
  *     {"typ":"dpop+jwt","alg":"ES256","jwk":{"key_ops":["verify"],"ext":true,"kty":"EC","x":…,"y":…,"crv":"P-256"}}
  *   payload 段是
  *     {"jti":"<32hex UUIDv4>","htm":"POST","htu":"…","iat":…,"ath":"…"}
+ *
+ * 已复核的官方版本（避免重复核对）：
+ *
+ *   日期        桌面端              CLI            结果
+ *   2026-09-03  0.1.9（首次对齐）    1.4.1        发现 desktop/terminal 与 undici/node 两处差异 → v0.9.7 对齐
+ *   2026-09-03  0.1.11              1.4.1        **零变化**：内嵌栈与 0.1.9 完全一致
+ *                                                （u1s1-cli 1.3.0 / Node 22.23.1 / openai 6.40.0 / undici 8.5.0），
+ *                                                device-auth.js 等指纹代码逐字节相同，本脚本实跑输出亦相同；
+ *                                                变的只有 sessions/updates/worktrees 等与网关无关的 pi-web 路由
+ *
+ *   下次真正需要同步的触发条件（任一成立才改代码）：
+ *   1. 桌面端内嵌的 u1s1-cli 不再是 1.3.0（看 node_modules/u1s1-cli/package.json）
+ *   2. npm u1s1-cli 超过 1.4.1（那是我们 x-u1s1-version 的取值）
+ *   3. 本脚本输出出现新增/缺失的头，或 DPoP 结构变化
  */
 
 import { createServer } from 'node:http';

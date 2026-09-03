@@ -61,11 +61,16 @@ open http://127.0.0.1:8080/admin/
 
 官方有两个发请求的入口，**只有两处差异**，本项目对齐桌面客户端：
 
-| 项 | 桌面客户端 0.1.9 | u1s1-cli 1.4.1 | 本项目 |
+| 项 | 桌面客户端 0.1.9 / 0.1.11 | u1s1-cli 1.4.1 | 本项目 |
 |---|---|---|---|
 | `x-u1s1-client` | `desktop` | `terminal` | `desktop` |
 | 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `undici` | `node` | `undici` |
 | chat UA / `X-Stainless-*` / `x-u1s1-platform` / DPoP 结构 | 相同 | 相同 | 已对齐 |
+
+已复核到 **桌面端 0.1.11**（2026-09-03）：与 0.1.9 相比指纹/请求头**零变化**（内嵌仍是
+u1s1-cli 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0，签名代码逐字节相同，实跑抓包亦相同）。
+下次真正需要同步的触发条件：桌面端内嵌的 u1s1-cli 不再是 1.3.0，或 npm `u1s1-cli` 超过 1.4.1
+（后者是 `x-u1s1-version` 的取值）。复核记录与跑法见脚本头注释。
 
 桌面客户端不是另一套实现：它把 u1s1-cli 当库用（`node_modules/u1s1-cli` 1.3.0 + 自带 Node 22.23.1），
 经 `u1s1-cli/embed` 调 `ensureSigningProxy(cfg, "desktop", attestation)`；CLI 自己传 `"terminal"`。

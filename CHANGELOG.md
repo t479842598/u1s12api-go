@@ -23,6 +23,18 @@
 - **chat 的 UA 是 `pi (…)` 不是 `undici`**：pi-ai `createClient()` 用 `defaultHeaders` 显式覆盖 SDK 默认的 `OpenAI/JS 6.40.0`；`undici` 只出现在裸 fetch 的辅助端点
 - **`x-u1s1-version` 保持 1.4.1**：桌面端 0.1.9 因内嵌 1.3.0 而发 1.3.0，但网关用这个头做旧版升级提示，报旧版本反而更容易被追加提示；1.4.1 是当前最新，与 desktop surface 的组合在官方 App 升级内嵌 CLI 后即自然出现
 
+#### 复核追加（2026-09-03 晚，桌面端 0.1.11）
+
+官方随后发布桌面客户端 0.1.11，已复核：**指纹/请求头零变化，无代码改动、不发新版本**。
+
+- 内嵌栈与 0.1.9 完全一致：u1s1-cli **1.3.0**、Node **v22.23.1**、openai **6.40.0**、undici **8.5.0**；`component-versions.json` 里 pi 仍 0.84.4、pi-web 仍 0.8.7
+- 指纹相关代码逐字节相同：`u1s1-cli/dist/{device-auth,api,web,config,login,agent-setup,index}.js`、Next instrumentation 的 `configureHttpDispatcher` chunk（`2349.js`）、`app/api/u1s1/login/*` 与 `app/api/models` 路由
+- 运行时证据：用 `docs/repro/desktop-fingerprint-capture.mjs` 对 0.1.11 与 0.1.9 各实跑一次抓包，输出除每次自造的随机密钥对 x/y 外**完全一致**
+- 0.1.9→0.1.11 真正变化的只有 `app/api/{sessions,updates,worktrees,worktrees/fetch}/route.js` 等 pi-web 功能路由，与网关请求无关
+- CLI 侧同步复核：npm `u1s1-cli` 仍 **1.4.1**，且 tarball 未被重新发布（shasum `06fff4ef…` 与上次一致，`dist` 各文件 `cmp` 相同）
+- 真实网关复验（生产凭证 device 656）：attestation 正常签发（`v=1 u=463 d=656`，TTL 168h）、真实 chat **HTTP 200**；生产服务仍为 v0.9.7 构建（md5 `588a9ab5…`）、`/healthz` ok、线上 chat 正常
+- **下次需要同步的触发条件**：桌面端内嵌 u1s1-cli 不再是 1.3.0，或 npm `u1s1-cli` 超过 1.4.1（`x-u1s1-version` 取值），或复现脚本输出出现新增/缺失头、DPoP 结构变化
+
 ### 新增
 
 - **`docs/repro/desktop-fingerprint-capture.mjs`**：可复跑的逐头核对脚本 —— 起本地 mock 网关，加载**官方自己的** `ensureSigningProxy` + 官方 pi-ai 客户端 + 官方 `undici.install()`，打印官方真实会发的每一个头（含 DPoP header/payload 解码），不碰真实网关、不消耗额度。以后官方发版跑一遍即可对头
