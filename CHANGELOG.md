@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.10.2 (2026-09-05)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.8.0**：`U1S1_VERSION` 默认值 `1.7.1` → **`1.8.0`**（`internal/config` 默认值 / `.env.example` / README / 生产 `.env`）。`x-u1s1-version` 头随之上到 1.8.0
+
+### 逆向核对（1.8.0 vs 1.7.1）
+
+官方 09-04 连发 1.6.0 / 1.7.0 / 1.7.1 / 1.8.0。逐文件 diff 1.7.1 与 1.8.0 tarball，**协议零变化**：
+
+- `device-auth.js`、`config.js`、`login.js`、`api.js` **逐字节未变** → DPoP 结构、签名代理、请求头集合、attestation 注入全部不变
+- `engines.node` 仍 `>=22.19.0`；依赖仍 `pi-coding-agent` / `pi-tui` 0.84.4 → `openai` 6.40.0，`X-Stainless-Package-Version` 不变
+- 1.8.0 真正新增的是**客户端 MCP 支持**：新增 `dist/mcp/`（client/command/config）、`agent-setup.js` 的 `writeMcpExtension()`、`u1s1 mcp` 子命令与 `~/.u1s1/mcp.json` 投影 —— 与网关请求无关
+- 结论：只需跟版本号，无代码改动
+
+### 验证
+
+- **真实网关活体复验**（生产凭证 + 生产同款 `macos-x64` 身份 + `U1S1_EXPECT_VERSION=1.8.0`）：attestation 正常签发（`v=1 u=463 d=1483`，TTL 168h）、真实 chat **HTTP 200** —— 网关接受 1.8.0
+- `go build ./...` + `go vet ./...` + `go test ./...` 全绿
+
 ## v0.10.1 (2026-09-05)
 
 ### 修复

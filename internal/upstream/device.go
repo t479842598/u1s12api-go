@@ -5,7 +5,7 @@
 // u1s1d- 设备凭证，之后每个请求用 RFC 9449 DPoP（ES256）签名 + 完整客户端指纹头，
 // 网关才识别为官方客户端。本文件实现同样的认证，供 u1s12api-go 消耗这批加量包。
 //
-// 指纹与请求头对齐的是**官方 CLI（terminal surface，当前 1.7.1）**，不是桌面客户端：
+// 指纹与请求头对齐的是**官方 CLI（terminal surface，当前 1.8.0）**，不是桌面客户端：
 // 桌面端截至 0.1.15 仍内嵌 CLI 1.3.0，报 desktop + 新版本是现实中不存在的组合（ADR 0001）。
 // 逐项取值见 internal/fingerprint 包注释，**线格式**（小写头名、HTTP/1.1、响应解压）
 // 见 internal/upstream/wire.go。两个官方入口用的是同一份 device-auth.js，头集合完全一致，
