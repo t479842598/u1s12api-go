@@ -18,7 +18,7 @@
 //	User-Agent: pi ({os.platform()} {os.release()}; {os.arch()})
 //	    例: pi (darwin 25.6.0; arm64)  ← pi-ai 的 getPiUserAgent()，覆盖 SDK 默认的
 //	                                      "OpenAI/JS 6.40.0"
-//	x-u1s1-version: 1.4.1             ← 网关按此识别客户端版本
+//	x-u1s1-version: 1.5.0             ← 网关按此识别客户端版本
 //	x-u1s1-client: desktop|terminal
 //	x-u1s1-platform: {os.platform()}-{os.arch()}   例: darwin-arm64
 //	x-u1s1-attestation: <token>       （1.3.0 新增：网关经 /v1/models 签发的客户端证明，
@@ -107,7 +107,7 @@ var Profiles = []Profile{
 	},
 }
 
-// OpenAI SDK 版本号（u1s1-cli 1.4.1 与桌面端 0.1.9 内嵌的 pi-ai 0.84.4 → openai 6.40.0）。
+// OpenAI SDK 版本号（u1s1-cli 1.4.1/1.5.0 与桌面端 0.1.9/0.1.11 内嵌的 pi-ai 0.84.4 → openai 6.40.0）。
 const SDKPackageVersion = "6.40.0"
 
 // ClientSurface x-u1s1-client 头。官方取值：

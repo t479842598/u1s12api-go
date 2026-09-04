@@ -141,11 +141,11 @@ func TestChatHeadersNoGoDefaultUA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := m.ChatHeaders("u1s1-k", "1.4.1")
+	h := m.ChatHeaders("u1s1-k", "1.5.0")
 	if !strings.HasPrefix(h["user-agent"], "pi (") {
 		t.Errorf("chat UA = %q, 期望 pi (...)", h["user-agent"])
 	}
-	if h["x-u1s1-version"] != "1.4.1" {
+	if h["x-u1s1-version"] != "1.5.0" {
 		t.Errorf("x-u1s1-version = %q", h["x-u1s1-version"])
 	}
 }

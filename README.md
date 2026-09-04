@@ -5,7 +5,7 @@
 ## 特性
 
 - **OpenAI 兼容**：`GET /v1/models`、`POST /v1/chat/completions`（流式 / 非流式）
-- **请求头指纹模拟**：与官方 u1s1-cli 1.4.1 完全一致（UA + X-Stainless-* + x-u1s1-version + x-u1s1-client + x-u1s1-platform + x-u1s1-attestation）
+- **请求头指纹模拟**：与官方 u1s1-cli 1.5.0 完全一致（UA + X-Stainless-* + x-u1s1-version + x-u1s1-client + x-u1s1-platform + x-u1s1-attestation）
 - **官网账号 + 设备授权**：后台录入官网账号（邮箱+密码），发起设备授权领回 `u1s1d-` 设备凭证（DPoP 签名），网关即被识别为官方客户端，消耗「仅限 u1s1 客户端使用」的加量包
 - **每日自动签到**：每天北京时间 0 点后用设备凭证调 `/v1/me` 自动领取每日打卡 200 万 Token 加量包
 - **设备凭证优先转发**：有已授权账号时聊天转发优先走设备凭证通道（消耗客户端量包），失败回退 `u1s1-` Key 池
@@ -41,7 +41,7 @@ open http://127.0.0.1:8080/admin/
 | `UPSTREAM_BASE_URL` | `https://api.u1s1.io/v1` | 上游网关 |
 | `EGRESS_PROXY_URL` | 空（直连） | 出口代理 `http://`/`socks5://` |
 | `FINGERPRINT_PROFILE` | `auto` | 头指纹档案 |
-| `U1S1_VERSION` | `1.4.1` | x-u1s1-version 头 |
+| `U1S1_VERSION` | `1.5.0` | x-u1s1-version 头 |
 | `LOG_LEVEL` | `info` | 日志级别 |
 | `QUOTA_AUTO_REFRESH` | `true` | 北京时间 0 点后自动全量刷新上游 Key 配额 |
 
@@ -61,15 +61,15 @@ open http://127.0.0.1:8080/admin/
 
 官方有两个发请求的入口，**只有两处差异**，本项目对齐桌面客户端：
 
-| 项 | 桌面客户端 0.1.9 / 0.1.11 | u1s1-cli 1.4.1 | 本项目 |
+| 项 | 桌面客户端 0.1.9 / 0.1.11 | u1s1-cli 1.5.0 | 本项目 |
 |---|---|---|---|
 | `x-u1s1-client` | `desktop` | `terminal` | `desktop` |
 | 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `undici` | `node` | `undici` |
 | chat UA / `X-Stainless-*` / `x-u1s1-platform` / DPoP 结构 | 相同 | 相同 | 已对齐 |
 
-已复核到 **桌面端 0.1.11**（2026-09-03）：与 0.1.9 相比指纹/请求头**零变化**（内嵌仍是
-u1s1-cli 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0，签名代码逐字节相同，实跑抓包亦相同）。
-下次真正需要同步的触发条件：桌面端内嵌的 u1s1-cli 不再是 1.3.0，或 npm `u1s1-cli` 超过 1.4.1
+已复核到 **桌面端 0.1.11** 与 **CLI 1.5.0**（2026-09-04）：桌面端与 0.1.9 相比指纹/请求头**零变化**（内嵌仍是
+u1s1-cli 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0，签名代码逐字节相同，实跑抓包亦相同）；CLI 1.4.1→1.5.0 也**零变化**（仅版本号，`dpopHeaders` 逐字相同，新增的只有响应转发修复与公告轮询端点）。
+下次真正需要同步的触发条件：桌面端内嵌的 u1s1-cli 不再是 1.3.0，或 npm `u1s1-cli` 超过 1.5.0
 （后者是 `x-u1s1-version` 的取值）。复核记录与跑法见脚本头注释。
 
 桌面客户端不是另一套实现：它把 u1s1-cli 当库用（`node_modules/u1s1-cli` 1.3.0 + 自带 Node 22.23.1），

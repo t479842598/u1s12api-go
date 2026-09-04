@@ -63,10 +63,13 @@
  *                                                （u1s1-cli 1.3.0 / Node 22.23.1 / openai 6.40.0 / undici 8.5.0），
  *                                                device-auth.js 等指纹代码逐字节相同，本脚本实跑输出亦相同；
  *                                                变的只有 sessions/updates/worktrees 等与网关无关的 pi-web 路由
+ *   2026-09-04  0.1.11              1.5.0        **零变化**：dpopHeaders/出站头集合与 1.4.1 逐字相同，
+ *                                                diff 只有响应转发修复（剔 content-encoding）与公告轮询端点；
+ *                                                仅 x-u1s1-version 值 1.4.1→1.5.0 → v0.9.8 同步版本号
  *
  *   下次真正需要同步的触发条件（任一成立才改代码）：
  *   1. 桌面端内嵌的 u1s1-cli 不再是 1.3.0（看 node_modules/u1s1-cli/package.json）
- *   2. npm u1s1-cli 超过 1.4.1（那是我们 x-u1s1-version 的取值）
+ *   2. npm u1s1-cli 超过 1.5.0（那是我们 x-u1s1-version 的取值）
  *   3. 本脚本输出出现新增/缺失的头，或 DPoP 结构变化
  */
 

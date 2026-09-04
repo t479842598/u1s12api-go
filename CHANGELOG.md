@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.9.8 (2026-09-04)
+
+### 变更
+
+- **指纹同步 u1s1-cli 1.5.0**：`U1S1_VERSION` 默认值 1.4.1 → 1.5.0（`internal/config` 默认值 / `.env.example` / README / 设置页 placeholder / 服务器 `.env`）。`x-u1s1-version` 头随之上到 1.5.0
+
+### 逆向核对（1.5.0 vs 1.4.1）
+
+官方 09-04 发布 CLI 1.5.0（npm `latest` 与官方 `/releases/LATEST` 均为 1.5.0）。逐文件 diff 1.5.0 与 1.4.1 tarball：
+
+- **请求头/鉴权/指纹零变化**：`dpopHeaders()`（JWK 键序、payload 键序、UUID v4 jti）与 1.4.1 **逐字相同**；签名代理出站头集合（`x-u1s1-client` / `x-u1s1-version` / `x-u1s1-platform` / `x-u1s1-attestation` / DPoP / X-Stainless 透传）不变；`api.js` 的 `fetchModels` / `fetchMe` 不变
+- **1.5.0 官方新增内容**（与请求指纹无关）：
+  - `device-auth.js` 新增 `forwardedResponseHeaders()` —— 转发**响应**时剔除 `content-encoding`，修复本地 SDK 对已解压响应二次 inflate 导致「非流式错误显示为 `<status> terminated`」的问题。这是响应侧修复，不影响我们（我们透传原始响应字节，无 SDK 解压层）
+  - `api.js` 新增 `fetchLatestAnnouncement()` —— 会话内公告轮询（`GET /public/announcements/latest`，带 `x-u1s1-version` + `Accept: application/json`，404 回退整份 /v1/models）。属客户端 UI 功能，我们代理不模拟
+- **SDK 不变**：deps 仍 `@earendil-works/pi-coding-agent` / `pi-tui` 0.84.4、openai 6.40.0 → `X-Stainless-Package-Version` 不变；桌面端 0.1.11 内嵌仍 u1s1-cli 1.3.0（无变化）
+
+### 503 事件记录（2026-09-04 凌晨）
+
+- 现象：北京时间约 10:24–10:27 用户调用持续 503
+- 日志定位（`journalctl -u u1s12api`，02:24–02:27 UTC）：`设备通道网络错误 … http2: timeout awaiting response headers`（账号 1、2 各超时 120s）+ `context canceled`（账号 3、4，客户端断开），打穿全部设备账号后返回 `503 device_channel_unavailable`；02:29 起恢复
+- 根因：**上游 api.u1s1.io 间歇性超时**（该时段恰好是 CLI 1.5.0 发版窗口，疑似网关发版/重启抖动），不是指纹被拒（无 401/403/带 body 的 503 透传记录），也不是我们的代码问题
+- 复验：02:33 UTC 起上游 `/v1/models` 直连 0.05–0.08s 响应、经网关 chat HTTP 200 正常；本次顺带把版本升到 1.5.0，规避网关对旧版本可能的异常处理
+- 可选改进（未做）：设备通道网络错误目前是每个账号串行等满 `ResponseHeaderTimeout=120s` 才轮换，遇到上游黑洞会拖长到 ~4 分钟才返回 503；如需缩短，可把设备通道的超时调小或失败轮换提速，另行评估
+
+### 验证
+
+- `go build ./...` + `go test ./...` 全绿；前端 `npm run build` 成功（设置页 placeholder 1.5.0）
+- **真实网关端到端（生产凭证 device 656，version=1.5.0）**：attestation 正常签发（payload `v=1 u=463 d=656`，TTL 168h，缓存命中 1µs），真实 chat **HTTP 200** —— 网关接受 `x-u1s1-version: 1.5.0` + desktop surface + 我们的 DPoP 结构
+
+
 ## v0.9.7 (2026-09-03)
 
 ### 变更

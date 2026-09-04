@@ -33,7 +33,7 @@ type Settings struct {
 
 const (
 	DefaultUpstreamBaseURL    = "https://api.u1s1.io/v1"
-	DefaultU1S1Version        = "1.4.1"
+	DefaultU1S1Version        = "1.5.0"
 	DefaultSiteFeedCheckHours = 24
 	defaultProfile            = "auto"
 )
@@ -219,7 +219,7 @@ func readEnvLines(path string) []string {
 # UPSTREAM_BASE_URL=https://api.u1s1.io/v1
 # EGRESS_PROXY=socks5://127.0.0.1:7897
 # FINGERPRINT_PROFILE=auto
-# U1S1_VERSION=1.4.1
+# U1S1_VERSION=1.5.0
 # BARK_KEY=                  ← Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
 # SITEFEED_CHECK_HOURS=24    ← 官网公告/更新记录检查间隔（小时）
 # QUOTA_AUTO_REFRESH=true   ← 北京时间 0 点额度重置后自动刷新全部上游 Key 配额
