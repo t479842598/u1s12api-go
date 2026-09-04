@@ -297,3 +297,47 @@ func TestIdentityBackfillActuallyWrites(t *testing.T) {
 		t.Errorf("重授权后应使用新快照：%+v", c3.Profile)
 	}
 }
+
+// TestPinDeviceIdentityOnUpgrade 升级启动时把既有授权账号钉成部署档案，
+// 这样它们对外发的 platform/UA 与升级前逐字节相同 —— 不需要重新授权。
+func TestPinDeviceIdentityOnUpgrade(t *testing.T) {
+	fx := setupTest(t, func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	a := mkDeviceAccount(t, fx, "pin1@test.dev", "u1s1d-pin1", 100)
+	mkDeviceAccount(t, fx, "pin2@test.dev", "u1s1d-pin2", 200)
+	// 未授权账号不该被钉（它还没有设备凭证，将来授权时自然用当时的身份）
+	fx.srv.store.AddAccount("fresh@test.dev", "", "")
+
+	n, err := fx.srv.store.PinDeviceIdentityForAccounts(fx.srv.currentIdentityJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("应钉住 2 个已授权账号，实际 %d", n)
+	}
+	got, _ := fx.srv.store.GetAccount(a.ID)
+	if got.DeviceIdentity == "" {
+		t.Fatal("已授权账号未被钉身份")
+	}
+	cred, err := fx.srv.accountCredential(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 钉住的身份必须就是部署当前身份（升级前后一致）
+	want := fx.srv.fp.Current()
+	if cred.Profile.UAPlatform != want.UAPlatform || cred.Profile.UAArch != want.UAArch ||
+		cred.Profile.UARelease != want.UARelease || cred.Profile.RuntimeVersion != want.RuntimeVersion {
+		t.Errorf("钉住的身份与部署身份不符：got=%+v want=%+v", cred.Profile, want)
+	}
+	// 幂等：再跑一次不重复更新、也不改变已钉住的值
+	if n2, _ := fx.srv.store.PinDeviceIdentityForAccounts(`{"id":"other","ua_platform":"aix","ua_arch":"x64"}`); n2 != 0 {
+		t.Errorf("已钉住的账号不应被再次覆盖，第二次影响 %d 行", n2)
+	}
+	after, _ := fx.srv.store.GetAccount(a.ID)
+	if after.DeviceIdentity != got.DeviceIdentity {
+		t.Error("第二次钉身份改变了已有快照")
+	}
+	// 未授权账号仍为空（将来授权时用当时身份）
+	if f, err := fx.srv.store.GetAccountByEmail("fresh@test.dev"); err == nil && f.DeviceIdentity != "" {
+		t.Error("未授权账号不该被钉身份")
+	}
+}

@@ -15,6 +15,7 @@ package fingerprint
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"runtime"
@@ -93,6 +94,28 @@ func StainlessArch(nodeArch string) string {
 	default:
 		return "other:" + nodeArch
 	}
+}
+
+// IdentityJSON 把身份序列化成入库快照（accounts.device_identity）。
+// 失败返回空串——凭证入库比身份快照重要，不能因此阻断授权。
+func IdentityJSON(p Profile) string {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// ParseIdentity 解析入库快照；空串或字段不全时返回 ok=false，由调用方回退全局身份。
+func ParseIdentity(s string) (Profile, bool) {
+	if strings.TrimSpace(s) == "" {
+		return Profile{}, false
+	}
+	var p Profile
+	if err := json.Unmarshal([]byte(s), &p); err != nil || p.UAPlatform == "" || p.UAArch == "" {
+		return Profile{}, false
+	}
+	return p, true
 }
 
 // DetectProfile 用部署机的真实事实拼出一个自洽身份。

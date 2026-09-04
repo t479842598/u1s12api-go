@@ -62,7 +62,15 @@ func main() {
 		appLogger.Errorf("初始化头指纹失败: %v", err)
 		os.Exit(1)
 	}
-	appLogger.Infof("请求头指纹: %s (%s)", fp.Current().ID, fingerprint.UserAgent(fp.Current()))
+	appLogger.Infof("请求头指纹: %s (%s) platform=%s", fp.Current().ID,
+		fingerprint.UserAgent(fp.Current()), fingerprint.ClientPlatform(fp.Current()))
+	// 把升级前就已授权的账号钉到它们一直在用的身份上，避免同一台设备突然换操作系统
+	// （那只能靠重新授权抹平，等于把升级代价转嫁给用户）。
+	if n, err := st.PinDeviceIdentityForAccounts(fingerprint.IdentityJSON(fp.Current())); err != nil {
+		appLogger.Warnf("固定已授权账号身份快照失败（不影响使用，首次请求时会逐个回填）: %v", err)
+	} else if n > 0 {
+		appLogger.Infof("已为 %d 个既有授权账号固定身份快照 %s（升级不改变它们的对外身份）", n, fp.Current().ID)
+	}
 
 	pool, err := upstream.NewPool(st)
 	if err != nil {

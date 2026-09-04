@@ -761,11 +761,8 @@ func AccountToCredential(deviceToken, privJWKJSON, pubJWKJSON, identityJSON stri
 		return nil, err
 	}
 	cred := &DeviceCredential{DeviceToken: deviceToken, PrivateJWK: priv, PublicJWK: pub, Profile: fallback}
-	if identityJSON != "" {
-		var p fingerprint.Profile
-		if err := json.Unmarshal([]byte(identityJSON), &p); err == nil && p.UAPlatform != "" && p.UAArch != "" {
-			cred.Profile = p
-		}
+	if p, ok := fingerprint.ParseIdentity(identityJSON); ok {
+		cred.Profile = p
 	}
 	return cred, nil
 }

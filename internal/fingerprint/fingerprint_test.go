@@ -253,7 +253,7 @@ func TestNormalizeNodeVersion(t *testing.T) {
 
 // ---------- Manager：默认 auto、迁移、Node 版本稳定 ----------
 
-// TestManagerDefaultsToAuto 未指定档案时身份来自真实主机，而不是从 Profiles 里随机挑。
+// TestManagerDefaultsToAuto 无状态文件时身份来自真实主机，而不是从 Profiles 里随机挑。
 func TestManagerDefaultsToAuto(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fp.json")
 	m, err := NewManager(path, "", "")
@@ -271,12 +271,71 @@ func TestManagerDefaultsToAuto(t *testing.T) {
 	}
 }
 
-// TestManagerLegacyStateMigratesToAuto 旧版本会随机挑一个假档案并持久化其 id；
-// 读到 Schema<2 的旧状态必须强制回到 auto，而不是继续沿用假档案。
-func TestManagerLegacyStateMigratesToAuto(t *testing.T) {
+// TestManagerLegacyStatePreserved 旧版会随机挑一个假档案并持久化其 id。
+// 那个 id 就是已授权设备一直在用的身份 —— 升级后必须**原样沿用**：
+// 同一台 device_token 突然换个操作系统是真实设备不会有的形态，而且只能靠
+// 重新授权抹平，等于把升级代价转嫁给用户。
+func TestManagerLegacyStatePreserved(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fp.json")
-	legacy, _ := json.Marshal(map[string]string{"profile_id": "windows-x64"})
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+	// 生产机当前的真实内容（v0.9.9 写的，无 schema 字段）
+	if err := os.WriteFile(path, []byte(`{"profile_id":"macos-x64"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(path, "auto", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Current().ID != "macos-x64" {
+		t.Errorf("升级后身份变了：%q，期望沿用 macos-x64（已授权设备会跳 platform）", m.Current().ID)
+	}
+	if m.IsAuto() {
+		t.Error("沿用既有档案时 IsAuto 应为 false")
+	}
+	// 对外可见的头值必须与升级前逐项一致
+	want := Profile{ID: "macos-x64", UAPlatform: "darwin", UARelease: "24.6.0", UAArch: "x64",
+		StainlessOS: "MacOS", StainlessArch: "x64", RuntimeVersion: "v22.19.0"}
+	got := m.Current()
+	if got.UAPlatform != want.UAPlatform || got.UAArch != want.UAArch || got.UARelease != want.UARelease ||
+		got.StainlessOS != want.StainlessOS || got.StainlessArch != want.StainlessArch ||
+		got.RuntimeVersion != want.RuntimeVersion {
+		t.Errorf("升级前后头值不一致：\n got=%+v\nwant=%+v", got, want)
+	}
+	if UserAgent(got) != "pi (darwin 24.6.0; x64)" {
+		t.Errorf("UA 变了：%q", UserAgent(got))
+	}
+	if ClientPlatform(got) != "darwin-x64" {
+		t.Errorf("x-u1s1-platform 变了：%q", ClientPlatform(got))
+	}
+	// 补写 schema 后 profile_id 不得变
+	st, err := loadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ProfileID != "macos-x64" || st.Schema != stateSchema {
+		t.Errorf("持久化状态不符：%+v", st)
+	}
+	// 再重启一次仍然沿用（幂等）
+	m2, _ := NewManager(path, "", "")
+	if m2.Current().ID != "macos-x64" {
+		t.Errorf("二次启动身份漂移：%q", m2.Current().ID)
+	}
+}
+
+// TestManagerFreshInstallUsesAuto 只有全新安装（无状态文件）才走真实主机派生。
+func TestManagerFreshInstallUsesAuto(t *testing.T) {
+	m, err := NewManager(filepath.Join(t.TempDir(), "fp.json"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.IsAuto() || m.Current().ID != ProfileIDAuto {
+		t.Errorf("全新安装应为 auto：%+v", m.Current())
+	}
+}
+
+// TestManagerDeletedProfileFallsBackToAuto 档案 id 被删时落回 auto，绝不随机再挑一个。
+func TestManagerDeletedProfileFallsBackToAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fp.json")
+	if err := os.WriteFile(path, []byte(`{"profile_id":"不存在的档案"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	m, err := NewManager(path, "", "")
@@ -284,15 +343,7 @@ func TestManagerLegacyStateMigratesToAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m.Current().ID != ProfileIDAuto {
-		t.Errorf("旧状态未迁移：Current().ID = %q", m.Current().ID)
-	}
-	// 迁移结果要落盘，避免下次启动又走一遍。
-	st, err := loadState(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Schema != stateSchema || st.ProfileID != ProfileIDAuto {
-		t.Errorf("迁移后状态 = %+v, 期望 schema=%d profile=auto", st, stateSchema)
+		t.Errorf("未知档案应落回 auto，得到 %q", m.Current().ID)
 	}
 }
 

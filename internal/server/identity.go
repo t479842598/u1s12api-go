@@ -7,8 +7,7 @@
 package server
 
 import (
-	"encoding/json"
-
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
 	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
@@ -16,11 +15,7 @@ import (
 // currentIdentityJSON 当前生效身份的 JSON 快照，供授权时入库。
 // 序列化失败时返回空串——凭证入库比身份快照重要，不能因此阻断授权。
 func (s *Server) currentIdentityJSON() string {
-	data, err := json.Marshal(s.fp.Current())
-	if err != nil {
-		return ""
-	}
-	return string(data)
+	return fingerprint.IdentityJSON(s.fp.Current())
 }
 
 // accountCredential 构造该账号的设备凭证，带上它自己的身份快照。

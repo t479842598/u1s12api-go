@@ -974,6 +974,24 @@ func (s *Store) MarkAccountUnauthorized(id int64, reason string) error {
 	return err
 }
 
+// PinDeviceIdentityForAccounts 把所有「已授权但还没有身份快照」的账号钉成给定身份，
+// 返回受影响行数。启动时调用一次。
+//
+// 为什么在启动时批量做、而不是等首次请求时逐个回填：升级前这些账号一直在用部署档案
+// 发请求，升级后必须继续用同一个身份，否则同一台 device_token 会突然换个操作系统。
+// 先钉住，后续任何后台切档案都不会再影响它们（设计 D-06）。
+func (s *Store) PinDeviceIdentityForAccounts(identityJSON string) (int64, error) {
+	if identityJSON == "" {
+		return 0, nil
+	}
+	res, err := s.db.Exec(`UPDATE accounts SET device_identity=?, updated_at=?
+		WHERE authorized=1 AND device_identity=''`, identityJSON, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // SetAccountDeviceIdentity 回填该账号的设备身份快照（老库升级后首次使用时调用）。
 //
 // 不用 UpdateAccount：它是 enabled/note/password 白名单实现，传新列会被静默丢弃。

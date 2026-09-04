@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.10.1 (2026-09-05)
+
+### 修复
+
+- **老部署沿用既有身份，升级不再要求重新授权**：v0.10.0 会把旧 `data/fingerprint.json`（无 schema 字段）强制迁成 `auto`，导致生产机从一直在用的 `macos-x64` 突变成 `linux-arm64` —— 同一台 `device_token` 突然换个操作系统，是真实设备不会有的形态，而且只能靠重新授权抹平，等于把升级代价转嫁给用户。现在改为：**只要状态文件里存着有效档案就原样沿用**，只有全新安装（无状态文件）才走真实主机派生；`FINGERPRINT_PROFILE` 显式指定仍然无条件尊重
+- **启动时批量钉身份**：新增 `Store.PinDeviceIdentityForAccounts`，把所有「已授权但无身份快照」的账号一次性钉成当前部署身份（幂等，`WHERE device_identity=''`，不覆盖已钉住的、不动未授权账号）。此后后台切档案不会影响任何既有设备
+- **还原被顺手改掉的档案取值**：`linux-arm64` 的 `RuntimeVersion` 回到 `v24.5.0`（v0.10.0 误改为 `v24.13.0`）。内置档案的 platform / release / arch / runtime 现与 v0.9.9 **逐项完全一致**，升级不改变任何对外头值
+- 移除后台账号列表里「设备名为旧版格式，重新授权可刷新」提示 —— 重新授权不是必需动作，留着只会误导
+
+### 变更范围澄清
+
+升级后**只有两处**对外头值按用户要求变化，其余全部保持原样：
+
+| 头 | 升级前 | 升级后 | 原因 |
+|---|---|---|---|
+| `x-u1s1-client` | `desktop` | `terminal` | 对齐官方 CLI（ADR 0001） |
+| `x-u1s1-version` | `1.5.0` | `1.7.1` | 跟随 npm latest |
+
+`x-u1s1-platform`、`user-agent`、`x-stainless-os/arch/runtime-version`、`device_name`（已授权设备在网关侧的名字）、设备凭证与授权状态**全部不变**。
+
+### 验证
+
+- `TestManagerLegacyStatePreserved`：用生产机真实内容 `{"profile_id":"macos-x64"}` 断言升级后 `Current().ID` 仍是 `macos-x64`，且 UA 仍是 `pi (darwin 24.6.0; x64)`、platform 仍是 `darwin-x64`、runtime 仍是 `v22.19.0`，二次启动不漂移
+- `TestPinDeviceIdentityOnUpgrade`：2 个已授权账号被钉住、未授权账号不受影响、二次执行 0 行变更且不覆盖已有快照
+- `TestManagerFreshInstallUsesAuto` / `TestManagerDeletedProfileFallsBackToAuto`：全新安装走 auto；档案 id 失效时落回 auto 而非随机再挑
+- **真实网关活体复验（用生产同款 `macos-x64` 身份 + 新线格式）**：attestation 正常签发（`v=1 u=463 d=1483`，TTL 168h）、真实 chat **HTTP 200** —— 网关接受「老身份 + HTTP/1.1 + 全小写头 + terminal + 1.7.1」组合
+- `go build ./...` + `go vet ./...` + `go test ./...` 全绿
+
 ## v0.10.0 (2026-09-05)
 
 对齐目标从「桌面客户端」改为「官方 u1s1-cli（terminal）」，并把上游请求从「头值大致对」修到「逐头逐字节对」：连接层、头名大小写、缺失头、压缩、身份来源、设备名、attestation 生命周期、401/403 处置全部按官方实测行为重做。

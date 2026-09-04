@@ -56,9 +56,14 @@ open http://127.0.0.1:8080/admin/
 | `linux-arm64` | `pi (linux 6.8.0-45-generic; arm64)` |
 | `windows-x64` | `pi (win32 10.0.26100; x64)` |
 
-选择 `auto`（默认）时，身份由**部署机真实环境**派生：`os.Hostname()` + `uname -r` 内核版本 +
+**全新安装**默认 `auto`：身份由部署机真实环境派生 —— `os.Hostname()` + `uname -r` 内核版本 +
 GOARCH→node arch 映射，写入 `data/fingerprint.json`。只有 Node 版本是声称值（我们不是 Node 进程），
 受官方 CLI `engines.node >= 22.19.0` 约束，且解析一次后长期沿用，不会每次重启漂移。
+
+**已有部署升级时原样沿用**：只要 `data/fingerprint.json` 里存着有效档案就不动它，启动时把所有
+已授权账号的身份快照钉成该档案（`PinDeviceIdentityForAccounts`，幂等）。因此升级**不需要重新授权**，
+也不会让同一台设备突然换个操作系统。想改用真实主机身份，在后台把档案切到 `auto`（只影响之后
+新授权的账号）或删掉 `data/fingerprint.json` 重启。
 
 ### 对齐的是哪个官方客户端
 
@@ -76,10 +81,11 @@ GOARCH→node arch 映射，写入 `data/fingerprint.json`。只有 Node 版本�
 而 npm CLI 已到 1.7.1 —— `desktop` + 新版本是现实中不存在的组合；且桌面端 Node 内嵌固定
 v22.23.1，轮转多套 runtime 版本在 desktop 口径下同样不可能。CLI 通道下这些值都真实存在。
 
-**为什么身份要取真实主机**（ADR 0002）：官方 CLI 报出的 hostname / platform / 内核版本 /
+**为什么新部署取真实主机身份**（ADR 0002）：官方 CLI 报出的 hostname / platform / 内核版本 /
 `device_name` 全部来自本机事实、互为佐证。轮转假档案会让这几项互相矛盾，而网关明确说它用
 「组合证据」持续观察。已授权账号沿用**授权当时**的身份快照（`accounts.device_identity`），
-后台切档案不影响它们 —— 真实世界里一台设备就是一个操作系统。
+后台切档案不影响它们 —— 真实世界里一台设备就是一个操作系统。**既有部署不在升级时被改造**，
+避免为了自洽而牺牲「无感升级」。
 
 已复核到 **CLI 1.7.1** 与 **桌面端 0.1.15**（2026-09-04）：请求链路**零变化**
 （`device-auth.js`/`config.js` 逐字节相同，`login.js` 只多一行日志）；1.7.1 唯一与本项目相关的

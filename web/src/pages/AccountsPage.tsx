@@ -416,11 +416,6 @@ export default function AccountsPage() {
                     {!a.enabled && a.authorized && (
                       <div className="mt-1 text-[11px] text-red-600">已停用 · 需人工到 u1s1.io 处理</div>
                     )}
-                    {a.authorized && a.device_name.startsWith("u1s12api-") && (
-                      <div className="mt-1 text-[11px] text-amber-600">
-                        设备名为旧版格式，重新授权可刷新为官方格式
-                      </div>
-                    )}
                   </TableCell>
                   <TableCell>
                     {a.quota && a.quota.total > 0 ? (

@@ -85,7 +85,7 @@ var Profiles = []Profile{
 	{
 		ID: "linux-arm64", Label: "Linux ARM64（手工伪装）",
 		Hostname: "ip-10-0-1-43", UAPlatform: "linux", UARelease: "6.8.0-45-generic", UAArch: "arm64",
-		StainlessOS: "Linux", StainlessArch: "arm64", RuntimeVersion: "v24.13.0",
+		StainlessOS: "Linux", StainlessArch: "arm64", RuntimeVersion: "v24.5.0",
 	},
 	{
 		ID: "windows-x64", Label: "Windows x64（手工伪装）",
@@ -157,9 +157,9 @@ type Manager struct {
 
 // stateFile 是 data/fingerprint.json 的内容。
 //
-// Schema 用于一次性迁移：v1（旧版）会随机/轮转挑一个假档案并持久化其 id，
-// 那与 ADR 0002 冲突；读到 Schema<2 时强制回到 auto 派生并回写。
-// 此后管理员在后台的手动切换（Schema==2）会被尊重并跨重启保留。
+// Schema 只用于记录版本，**不作为是否沿用旧档案的判据**：旧版（无 schema）会随机挑一个
+// 假档案并持久化其 id，而那个 id 正是已授权设备一直在用的身份 —— 升级时必须沿用，
+// 否则同一台 device_token 会突然换个操作系统（见 NewManager 注释）。
 type stateFile struct {
 	Schema      int    `json:"schema"`
 	ProfileID   string `json:"profile_id"`
@@ -170,11 +170,16 @@ const stateSchema = 2
 
 // NewManager 加载或初始化身份。
 //
-// forcedID：FINGERPRINT_PROFILE 的值。空或 "auto" → 真实主机派生；命中 Profiles 里的
-// id → 使用该伪装档案。nodeVersionOverride：FINGERPRINT_NODE_VERSION，空则自动解析。
+// forcedID：FINGERPRINT_PROFILE 的值。空或 "auto" 时：已有持久化档案的部署**原样沿用**，
+// 只有全新安装（无状态文件）才走真实主机派生；forcedID 命中 Profiles 里的 id 则强制该伪装档案。
+//
+// 为什么不能把旧档案强制迁成 auto（重要）：已授权设备的 platform / UA / X-Stainless-*
+// 是从这个档案发出去的，网关侧对这台 device_token 的认知也建立在此之上。一迁 auto，
+// 同一台设备会突然从 macos-x64 变成 linux-arm64 —— 那是真实设备不会有的形态，而且
+// 只能靠重新授权才能抹平。把升级代价转嫁给用户是错的设计：升级应当对已有设备无感。
 func NewManager(statePath, forcedID, nodeVersionOverride string) (*Manager, error) {
 	m := &Manager{statePath: statePath}
-	st, _ := loadState(statePath) // 读不到就是首次启动
+	st, stErr := loadState(statePath) // stErr != nil 就是首次启动
 
 	// Node 版本一旦确定就长期沿用，避免重启后声称的运行时版本漂移。
 	nodeVersion := normalizeNodeVersion(st.NodeVersion)
@@ -184,20 +189,24 @@ func NewManager(statePath, forcedID, nodeVersionOverride string) (*Manager, erro
 	}
 	m.nodeVersion = nodeVersion
 
-	// 身份来源优先级：环境变量显式指定 > 已持久化且是本次之前人工切换过的伪装档案 > auto 派生。
-	switch {
-	case forcedID != "" && forcedID != ProfileIDAuto:
+	// 1) 环境变量显式指定 → 无条件尊重（伪装逃生口）。
+	if forcedID != "" && forcedID != ProfileIDAuto {
 		if p, ok := ProfileByID(forcedID); ok {
 			m.set(p, true)
 			return m, m.persist()
 		}
-	case st.Schema >= stateSchema && st.ProfileID != "" && st.ProfileID != ProfileIDAuto:
+	}
+	// 2) 只要状态文件里存着一个有效档案（不管是旧版随机选的、还是后台手动切的），
+	//    就继续用它 —— 保证升级对已授权设备无感。
+	if stErr == nil && st.ProfileID != "" && st.ProfileID != ProfileIDAuto {
 		if p, ok := ProfileByID(st.ProfileID); ok {
 			m.set(p, true)
-			return m, nil
+			// 补写 schema / node_version，但**不改 profile_id**：身份不能因为升级就变。
+			return m, m.persist()
 		}
 		// 档案 id 已不存在（被删）→ 落回 auto，绝不随机再挑一个。
 	}
+	// 3) 全新安装（或档案已失效）→ 本机真实环境派生。
 	m.set(DetectProfile(m.nodeVersion), false)
 	return m, m.persist()
 }
