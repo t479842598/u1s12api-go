@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 )
@@ -385,5 +386,53 @@ func TestDeviceJWKMarshalKeyOps(t *testing.T) {
 	// 往返解析（存储/读取）不受键序影响
 	if _, err := parseJWK(string(gj)); err != nil {
 		t.Errorf("公钥 JWK 反解析失败: %v", err)
+	}
+}
+
+// TestDeviceChatFastTimeoutOnBlackhole 上游黑洞（不发响应头）时应在短超时内快速失败，
+// 而不是等满旧值 120s。回归点：2026-09-04 上游发版窗口两波黑洞（02:24、02:46 UTC），
+// 4 账号串行轮换最坏 ~8 分钟才 503；ResponseHeaderTimeout 120s → 30s 后最坏 ~2 分钟。
+// 正常长流式不受影响（响应头秒级返回，body 慢慢推）。
+func TestDeviceChatFastTimeoutOnBlackhole(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 黑洞：不写响应头。注意不能无限挂起——Go http server 在 handler 挂起时
+		// 检测不到客户端断连，会导致 httptest.Server.Close 死等；故加 5s 上限自退出。
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+
+	dc := NewDeviceClient(srv.URL, "", func() string { return "1.5.0" }, nil)
+	dc.headerTimeout = 300 * time.Millisecond // 测试用短超时，避免等 30s
+	start := time.Now()
+	resp, err := dc.DeviceChat(context.Background(), deviceCredential(t), []byte(`{"model":"m"}`), "")
+	elapsed := time.Since(start)
+	if err == nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		t.Fatal("黑洞时应返回错误")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("黑洞应在 ~300ms 内失败，实际耗时 %v", elapsed)
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("错误应含 timeout，实际: %v", err)
+	}
+}
+
+// TestDefaultHeaderTimeout 默认超时必须是 30s（防止回退到 120s 的慢轮换）。
+func TestDefaultHeaderTimeout(t *testing.T) {
+	if defaultHeaderTimeout != 30*time.Second {
+		t.Errorf("defaultHeaderTimeout = %v, 期望 30s", defaultHeaderTimeout)
+	}
+	dc := NewDeviceClient("https://api.u1s1.io/v1", "", func() string { return "1.5.0" }, nil)
+	if dc.headerTimeout != 0 {
+		t.Errorf("默认字段应为 0（运行时回退默认值），实际 %v", dc.headerTimeout)
 	}
 }

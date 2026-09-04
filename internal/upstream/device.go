@@ -93,6 +93,11 @@ type DeviceClient struct {
 	clientVersion func() string
 	// profile 当前指纹档案（x-u1s1-platform / UA / X-Stainless-* 与其自洽）。
 	profile func() fingerprint.Profile
+	// headerTimeout 等待上游响应头的超时。默认 30s（见 defaultHeaderTimeout）：
+	// 正常请求（含长流式）响应头都秒级返回，body 慢慢推不受影响；
+	// 上游黑洞（不发响应头，如发版窗口抖动）时 30s 即失败轮换，
+	// 避免每个账号串行等满 120s（4 账号最坏 ~8 分钟才 503）。测试可覆盖。
+	headerTimeout time.Duration
 }
 
 // NewDeviceClient 构造。baseURL 形如 https://api.u1s1.io/v1。
@@ -403,13 +408,25 @@ func (c *DeviceClient) postJSON(ctx context.Context, u string, body any) ([]byte
 	return data, nil
 }
 
+// defaultHeaderTimeout 设备通道请求等待上游响应头的超时（30s）。
+// 上游黑洞（连响应头都不返回）时 30s 即失败，轮换/返回 503；
+// 正常长输出是流式（响应头秒级返回、body 慢慢推），不受影响。
+const defaultHeaderTimeout = 30 * time.Second
+
+// httpClient 构造设备通道 HTTP 客户端。
+// ResponseHeaderTimeout 只约束「收到响应头」的等待：黑洞时快速失败，
+// 长流式（body 慢）不受影响。
 func (c *DeviceClient) httpClient() *http.Client {
+	ht := c.headerTimeout
+	if ht <= 0 {
+		ht = defaultHeaderTimeout
+	}
 	tr := &http.Transport{
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          16,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: 120 * time.Second,
+		ResponseHeaderTimeout: ht,
 	}
 	if c.proxy != "" {
 		if u, err := url.Parse(c.proxy); err == nil && (u.Scheme == "http" || u.Scheme == "https") {

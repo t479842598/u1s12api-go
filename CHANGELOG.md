@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.9.9 (2026-09-04)
+
+### 修复
+
+- **设备通道上游黑洞快速失败**：`ResponseHeaderTimeout` 120s → **30s**（`internal/upstream/device.go`，`DeviceClient.headerTimeout` 可覆盖）。只约束「收到响应头」的等待，正常长流式零影响（响应头秒级返回、body 慢慢推）；上游黑洞（连响应头都不返回）时 30s 即失败轮换/返回 503，不再每个账号串行等满 120s（4 账号最坏 ~8 分钟）
+
+### 背景（2026-09-04 两次 503 排查）
+
+- **02:24–02:27 UTC**：上游黑洞，日志 `http2: timeout awaiting response headers`，4 账号串行各等满 120s（duration 120s/240s/298s），用户等 ~5 分钟才断 → `503 device_channel_unavailable`
+- **02:46:45 UTC**：`deepseek-v4-flash-vision-exp` 请求，4 账号 duration 均 ~22.6s（22633–22643ms，毫秒差）——同一请求 r.Context() 在 ~22.6s 被取消（**客户端先断连**），串行轮换的后续账号随 ctx 取消立即失败
+- **排查排除项**：非指纹被拒（无 401/403/带 body 的 503 透传）；非 nginx（u1s1.tang74.top `proxy_read_timeout 86400`）；服务本身正常（02:49 flash、02:54 vision 均 200，2.5–3.4s）
+- **根因**：上游 api.u1s1.io 间歇性黑洞（两次都在 CLI 1.5.0 发版窗口），叠加我们轮换太慢（120s×N）。改进后黑洞最坏 ~2 分钟内出 503，且单请求 30s 内即失败，客户端多数等不到自己的超时
+- 客户端 22.6s 断连属用户调用方超时设置，服务端无法完全规避；30s 超时已把服务端失败压到同量级
+
+### 验证
+
+- 新增 `TestDeviceChatFastTimeoutOnBlackhole`（mock 上游挂起，300ms 短超时下 ~300ms 内失败、错误含 timeout）+ `TestDefaultHeaderTimeout`（默认 30s 防回退）；`go test ./...` 全绿
+- 生产实测（改前）：上游直连 0.05–0.07s、`deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 经网关均 HTTP 200（2.5–3.4s）——确认上游故障为当时偶发，非持续
+
 ## v0.9.8 (2026-09-04)
 
 ### 变更
