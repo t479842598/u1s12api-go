@@ -132,6 +132,11 @@ func (s *Store) migrate() error {
 		`ALTER TABLE accounts ADD COLUMN last_web_checkin_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE accounts ADD COLUMN web_checkin_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN packages_json TEXT NOT NULL DEFAULT ''`,
+		// 该账号授权当时的客户端身份快照（JSON）—— 一台设备就是一个系统，
+		// 不能因为后台切了档案就让已授权设备集体换系统（设计 D-06）。
+		`ALTER TABLE accounts ADD COLUMN device_identity TEXT NOT NULL DEFAULT ''`,
+		// 被网关拒绝的原因（401 需重授权 / 403 不受信任已停用），供后台展示与排障。
+		`ALTER TABLE accounts ADD COLUMN device_status_reason TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate: %w", err)
@@ -776,32 +781,36 @@ func (s *Store) RecentRequests(n int) ([]*RequestRecord, error) {
 
 // Account 官网账号记录（含设备凭证，明文存储与 upstream_keys 一致）。
 type Account struct {
-	ID                   int64  `json:"id"`
-	Email                string `json:"email"`
-	EmailMasked          string `json:"email_masked"`
-	Password             string `json:"password,omitempty"`
-	Note                 string `json:"note"`
-	Enabled              bool   `json:"enabled"`
-	HasPassword          bool   `json:"has_password"`
-	DeviceToken          string `json:"device_token"`
-	DeviceTokenMasked    string `json:"device_token_masked"`
-	APIKey               string `json:"api_key,omitempty"`
-	APIKeyMasked         string `json:"api_key_masked"`
-	DeviceID             string `json:"device_id"`
-	DevicePrivateJWK     string `json:"device_private_jwk,omitempty"`
-	DevicePublicJWK      string `json:"device_public_jwk"`
-	DeviceName           string `json:"device_name"`
-	Authorized           bool   `json:"authorized"`
+	ID                int64  `json:"id"`
+	Email             string `json:"email"`
+	EmailMasked       string `json:"email_masked"`
+	Password          string `json:"password,omitempty"`
+	Note              string `json:"note"`
+	Enabled           bool   `json:"enabled"`
+	HasPassword       bool   `json:"has_password"`
+	DeviceToken       string `json:"device_token"`
+	DeviceTokenMasked string `json:"device_token_masked"`
+	APIKey            string `json:"api_key,omitempty"`
+	APIKeyMasked      string `json:"api_key_masked"`
+	DeviceID          string `json:"device_id"`
+	DevicePrivateJWK  string `json:"device_private_jwk,omitempty"`
+	DevicePublicJWK   string `json:"device_public_jwk"`
+	DeviceName        string `json:"device_name"`
+	// DeviceIdentity 授权当时的客户端身份快照（fingerprint.Profile 的 JSON）。
+	DeviceIdentity string `json:"-"`
+	Authorized     bool   `json:"authorized"`
+	// DeviceStatusReason 设备被网关拒绝的原因（401/403），空=正常。
+	DeviceStatusReason    string `json:"device_status_reason,omitempty"`
 	LastCheckinAt         int64  `json:"last_checkin_at"`
 	LoginCheckinRemaining int64  `json:"login_checkin_remaining"`
 	LastWebCheckinAt      int64  `json:"last_web_checkin_at"`
 	WebCheckinStatus      string `json:"web_checkin_status,omitempty"`
 	// PackagesJSON 上游 /v1/me 返回的加量包快照（JSON 数组，仅入库，不回明文）。
-	PackagesJSON          string `json:"-"`
-	TotalRequests         int64  `json:"total_requests"`
-	TotalTokens           int64  `json:"total_tokens"`
-	CreatedAt             int64  `json:"created_at"`
-	UpdatedAt             int64  `json:"updated_at"`
+	PackagesJSON  string `json:"-"`
+	TotalRequests int64  `json:"total_requests"`
+	TotalTokens   int64  `json:"total_tokens"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // AccountPackage 账号加量包快照项（上游 packages 的裁剪字段）。
@@ -820,15 +829,16 @@ type AccountPackage struct {
 }
 
 const accountCols = `id,email,password,note,enabled,device_token,api_key,device_id,
-	device_private_jwk,device_public_jwk,device_name,authorized,last_checkin_at,
-	login_checkin_remaining,last_web_checkin_at,web_checkin_status,packages_json,
+	device_private_jwk,device_public_jwk,device_name,device_identity,authorized,device_status_reason,
+	last_checkin_at,login_checkin_remaining,last_web_checkin_at,web_checkin_status,packages_json,
 	total_requests,total_tokens,created_at,updated_at`
 
 func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	a := &Account{}
 	var enabled, authorized int
 	err := row.Scan(&a.ID, &a.Email, &a.Password, &a.Note, &enabled, &a.DeviceToken, &a.APIKey,
-		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &authorized,
+		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &a.DeviceIdentity, &authorized,
+		&a.DeviceStatusReason,
 		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.LastWebCheckinAt, &a.WebCheckinStatus,
 		&a.PackagesJSON, &a.TotalRequests, &a.TotalTokens, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
@@ -933,17 +943,56 @@ func (s *Store) GetAccountCredential(id int64) (email, password string, err erro
 }
 
 // SaveAccountDeviceCredential 写入设备凭证并标记已授权。
-func (s *Store) SaveAccountDeviceCredential(id int64, deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName string) error {
+//
+// identityJSON 是该账号**授权当时**的客户端身份快照（fingerprint.Profile 的 JSON）；
+// 写入后该账号后续请求一律用它，不再跟随全局档案漂移。重授权会刷新该快照。
+func (s *Store) SaveAccountDeviceCredential(id int64, deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, identityJSON string) error {
 	_, err := s.db.Exec(`UPDATE accounts SET device_token=?, api_key=?, device_id=?,
-		device_private_jwk=?, device_public_jwk=?, device_name=?, authorized=1, updated_at=?
+		device_private_jwk=?, device_public_jwk=?, device_name=?, device_identity=?,
+		authorized=1, enabled=1, device_status_reason='', updated_at=?
 		WHERE id=?`,
-		deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, time.Now().Unix(), id)
+		deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, identityJSON, time.Now().Unix(), id)
+	return err
+}
+
+// DisableAccountByGateway 因网关判定不可信而停用账号（403：封禁/停用/设备不受信任）。
+//
+// 官方 CLI 遇到这类响应是直接 process.exit(1) 停止一切请求（1.7.1 新增的
+// AccessDeniedError），所以我们也不能继续拿这台设备去敲门：必须停用并留原因，
+// 等人工去官网处理。重授权（SaveAccountDeviceCredential）会把 enabled 恢复为 1。
+func (s *Store) DisableAccountByGateway(id int64, reason string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET enabled=0, device_status_reason=?, updated_at=? WHERE id=?`,
+		reason, time.Now().Unix(), id)
+	return err
+}
+
+// MarkAccountUnauthorized 凭证被网关吐销（401：设备被移除/换过钥匙），标记为需重新授权。
+// 与停用的区别：账号本身没问题，重新点一次「授权」即可恢复，因此不动 enabled。
+func (s *Store) MarkAccountUnauthorized(id int64, reason string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET authorized=0, device_status_reason=?, updated_at=? WHERE id=?`,
+		reason, time.Now().Unix(), id)
+	return err
+}
+
+// SetAccountDeviceIdentity 回填该账号的设备身份快照（老库升级后首次使用时调用）。
+//
+// 不用 UpdateAccount：它是 enabled/note/password 白名单实现，传新列会被静默丢弃。
+func (s *Store) SetAccountDeviceIdentity(id int64, identityJSON string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET device_identity=?, updated_at=? WHERE id=? AND device_identity=''`,
+		identityJSON, time.Now().Unix(), id)
+	return err
+}
+
+// ClearAccountDeviceReason 清空设备状态原因（人工确认已处理后用）。
+func (s *Store) ClearAccountDeviceReason(id int64) error {
+	_, err := s.db.Exec(`UPDATE accounts SET device_status_reason='', updated_at=? WHERE id=?`,
+		time.Now().Unix(), id)
 	return err
 }
 
 // ListAuthorizedEnabledAccounts 返回已授权且启用的账号（供每日签到、设备通道使用）。
 func (s *Store) ListAuthorizedEnabledAccounts() ([]*Account, error) {
-	rows, err := s.db.Query(`SELECT `+accountCols+` FROM accounts WHERE authorized=1 AND enabled=1 ORDER BY id`)
+	rows, err := s.db.Query(`SELECT ` + accountCols + ` FROM accounts WHERE authorized=1 AND enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

@@ -125,22 +125,22 @@ func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
 		}
 		view := buildAccountQuotaView(a)
 		accQuota = append(accQuota, map[string]any{
-			"id":          a.ID,
+			"id":           a.ID,
 			"email_masked": a.EmailMasked,
-			"total":       view.Total,
-			"capacity":    view.Capacity,
-			"updated_at":  view.UpdatedAt,
-			"items":       view.Items,
+			"total":        view.Total,
+			"capacity":     view.Capacity,
+			"updated_at":   view.UpdatedAt,
+			"items":        view.Items,
 		})
 	}
 
 	writeAPIData(w, http.StatusOK, map[string]any{
-		"today":  today,
-		"totals": allTime,
-		"keys":   keyStats,
-		"daily":  daily,
-		"models": models,
-		"recent": recent,
+		"today":         today,
+		"totals":        allTime,
+		"keys":          keyStats,
+		"daily":         daily,
+		"models":        models,
+		"recent":        recent,
 		"account_quota": accQuota,
 		"fingerprint": map[string]any{
 			"profile":    fp.ID,
@@ -590,24 +590,55 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"bark_key":              cfg.BarkKey,
 		"site_feed_check_hours": cfg.SiteFeedCheckHours,
 		"log_level":             cfg.LogLevel,
-		"profiles":              profileSummaries(),
+		"profiles":              profileSummaries(s.fp),
 		"current_profile":       s.fp.Current().ID,
+		// 当前身份的完整构成，便于在后台一眼核对"我们到底像谁"（五者必须同源）。
+		"identity":              identitySummary(s.fp),
 		"quota_auto_refresh":    cfg.QuotaAutoRefresh,
 		"next_quota_refresh_at": s.nextQuotaCheckAtSnapshot(),
 	})
 }
 
-func profileSummaries() []map[string]string {
-	out := make([]map[string]string, 0, len(fingerprint.Profiles))
+// profileSummaries 后台可选档案。**auto 排第一**且是当前默认：
+// 身份由部署机真实环境派生（ADR 0002），其余是手工伪装逃生口。
+func profileSummaries(m *fingerprint.Manager) []map[string]string {
+	auto := m.Current()
+	out := make([]map[string]string, 0, len(fingerprint.Profiles)+1)
+	out = append(out, map[string]string{
+		"id":          fingerprint.ProfileIDAuto,
+		"label":       "auto（本机真实环境）",
+		"user_agent":  fingerprint.UserAgent(auto),
+		"runtime":     auto.RuntimeVersion,
+		"device_name": fingerprint.DeviceName(auto),
+	})
 	for _, p := range fingerprint.Profiles {
 		out = append(out, map[string]string{
-			"id":         p.ID,
-			"label":      p.Label,
-			"user_agent": fingerprint.UserAgent(p),
-			"runtime":    p.RuntimeVersion,
+			"id":          p.ID,
+			"label":       p.Label,
+			"user_agent":  fingerprint.UserAgent(p),
+			"runtime":     p.RuntimeVersion,
+			"device_name": fingerprint.DeviceName(p),
 		})
 	}
 	return out
+}
+
+// identitySummary 当前生效身份的完整构成（platform / 内核 / 主机名 / device_name / UA）。
+func identitySummary(m *fingerprint.Manager) map[string]any {
+	p := m.Current()
+	return map[string]any{
+		"auto":           m.IsAuto(),
+		"id":             p.ID,
+		"hostname":       p.Hostname,
+		"platform":       fingerprint.ClientPlatform(p),
+		"kernel":         p.UARelease,
+		"stainless_os":   p.StainlessOS,
+		"stainless_arch": p.StainlessArch,
+		"node_version":   p.RuntimeVersion,
+		"user_agent":     fingerprint.UserAgent(p),
+		"device_name":    fingerprint.DeviceName(p),
+		"x_u1s1_client":  fingerprint.ClientSurface,
+	}
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {

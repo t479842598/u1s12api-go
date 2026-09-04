@@ -11,18 +11,18 @@ import (
 
 // KeyState 池内单把 key 的运行态（DB 行的内存镜像 + 冷却判定）。
 type KeyState struct {
-	ID           int64
-	Key          string
-	Status       string // active|cooldown|disabled
+	ID            int64
+	Key           string
+	Status        string // active|cooldown|disabled
 	CooldownUntil time.Time
 }
 
 // Pool 上游 key 池：轮询选取、按结果冷却/禁用。
 type Pool struct {
-	mu      sync.RWMutex
-	keys    []*KeyState
-	rr      atomic.Int64
-	store   *store.Store
+	mu    sync.RWMutex
+	keys  []*KeyState
+	rr    atomic.Int64
+	store *store.Store
 }
 
 // NewPool 从 DB 加载全部 key。

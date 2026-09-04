@@ -202,7 +202,7 @@ func (s *Server) bestDeviceCredential(ctx context.Context) (attestation string, 
 		return deviceQuotaSortKey(candidates[i]) > deviceQuotaSortKey(candidates[j])
 	})
 	for _, acc := range candidates {
-		dc, cerr := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+		dc, cerr := s.accountCredential(acc)
 		if cerr != nil {
 			logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, cerr)
 			continue
@@ -215,9 +215,10 @@ func (s *Server) bestDeviceCredential(ctx context.Context) (attestation string, 
 // tryDeviceChatCompletion 尝试用已授权官网账号的设备凭证（DPoP + 指纹头）转发对话。
 //
 // 返回三元组：
-//	 served        —— 已写出响应（成功，或已被请求级错误透传），调用方直接返回；
-//	 accountsExisted —— 是否存在已授权账号（区分「没配账号」与「有账号但全不可用」）；
-//	 hint          —— 当 accountsExisted 但未 served 时的人类可读原因，供调用方构造清晰错误。
+//
+//	served        —— 已写出响应（成功，或已被请求级错误透传），调用方直接返回；
+//	accountsExisted —— 是否存在已授权账号（区分「没配账号」与「有账号但全不可用」）；
+//	hint          —— 当 accountsExisted 但未 served 时的人类可读原因，供调用方构造清晰错误。
 //
 // 多账号调度策略：按剩余额度降序——**有额度的账号直接调用**（额度最多者优先）；
 // 仅当其触发 quota_exceeded（当日额度耗尽）被标记冷却后，本请求切到下一个
@@ -257,7 +258,7 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 		if s.deviceIsExhausted(acc.ID) {
 			continue // 本请求内可能刚被标记
 		}
-		cred, cerr := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+		cred, cerr := s.accountCredential(acc)
 		if cerr != nil {
 			logger.Warnf("设备凭证解析失败 account=%s: %v", acc.Email, cerr)
 			continue
@@ -270,9 +271,30 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 			var apiErr *upstream.APIError
 			if asAPIError(derr, &apiErr) {
 				logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
-				// 401/403 可能是令牌被网关判无效（撤销/换设备/过期），丢缓存，下次重新签发。
-				if apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden {
+				// 403：官方 1.7.1 定性为「封禁/停用/设备不受信任」，重登也没用（CLI 直接 exit(1)）。
+				// 对应动作：停用该账号 + Bark 告警 + 透传原因 + **停止换下一个账号重试同一请求**。
+				if upstream.DeviceNotTrusted(apiErr.StatusCode, apiErr.Body) {
 					s.attest.Invalidate(cred)
+					reason := fmt.Sprintf("网关拒绝（403）：%s", truncate(apiErr.Body, 200))
+					if derr := s.store.DisableAccountByGateway(acc.ID, reason); derr != nil {
+						logger.Warnf("停用不受信任账号失败 account=%s: %v", acc.Email, derr)
+					}
+					logger.Warnf("设备账号被网关判为不受信任（403），已停用 account=%s：%s", acc.Email, truncate(apiErr.Body, 200))
+					s.alertDeviceNotTrusted(acc.Email, apiErr.Body)
+					s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+					passthroughUpstreamError(w, apiErr)
+					return true, true, ""
+				}
+				// 401：设备被移除/换过钥匙。丢令牌缓存 + 标记需重新授权（不动 enabled），继续下一个账号。
+				if upstream.DeviceCredentialRetired(apiErr.StatusCode) {
+					s.attest.Invalidate(cred)
+					if derr := s.store.MarkAccountUnauthorized(acc.ID, "设备被网关移除或更换过钥匙，需重新授权"); derr != nil {
+						logger.Warnf("标记账号需重新授权失败 account=%s: %v", acc.Email, derr)
+					}
+					logger.Warnf("设备凭证已失效（401），标记需重新授权 account=%s", acc.Email)
+					s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
+					lastHint = fmt.Sprintf("设备账号 %s 的凭证已失效（需在后台重新授权）", acc.Email)
+					continue
 				}
 				s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
 				// 请求级错误（内容审查 / 未知模型 / 请求体非法）：由请求体决定，换账号必然同样失败。

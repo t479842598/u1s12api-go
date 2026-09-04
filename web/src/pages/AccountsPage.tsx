@@ -407,6 +407,20 @@ export default function AccountsPage() {
                     ) : (
                       <Badge variant="outline" className="gap-1"><Unplug className="h-3 w-3" /> 未授权</Badge>
                     )}
+                    {/* 网关拒绝原因：401 需重新授权 / 403 不受信任已停用（官方语义：重登也没用） */}
+                    {a.device_status_reason && (
+                      <div className="mt-1 max-w-[220px] text-[11px] leading-tight text-red-600">
+                        {a.device_status_reason}
+                      </div>
+                    )}
+                    {!a.enabled && a.authorized && (
+                      <div className="mt-1 text-[11px] text-red-600">已停用 · 需人工到 u1s1.io 处理</div>
+                    )}
+                    {a.authorized && a.device_name.startsWith("u1s12api-") && (
+                      <div className="mt-1 text-[11px] text-amber-600">
+                        设备名为旧版格式，重新授权可刷新为官方格式
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell>
                     {a.quota && a.quota.total > 0 ? (

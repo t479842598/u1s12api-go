@@ -66,11 +66,11 @@ func TestOneClickLoginAutoProvision(t *testing.T) {
 	}
 	var conf struct {
 		Data struct {
-			Status    string `json:"status"`
-			Authorized bool  `json:"authorized"`
-			AccountID int64  `json:"account_id"`
-			Email     string `json:"email"`
-			APIKey    string `json:"api_key"`
+			Status     string `json:"status"`
+			Authorized bool   `json:"authorized"`
+			AccountID  int64  `json:"account_id"`
+			Email      string `json:"email"`
+			APIKey     string `json:"api_key"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(cresp.Body).Decode(&conf); err != nil {

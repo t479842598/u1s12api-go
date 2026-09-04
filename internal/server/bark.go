@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/t479842598/u1s12api-go/internal/store"
 )
 
 const (
@@ -64,4 +66,23 @@ func barkPush(key, title, body, url string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// alertDeviceNotTrusted 设备账号被网关判为不受信任（403）时告警。
+//
+// 为什么必须告警而不是静默换下一个账号：官方 1.7.1 把这类 403 定性为「重登也没用」，
+// 只有人工去官网（https://u1s1.io/dashboard 提工单 / contact@u1s1.io）才能恢复。
+// 不告警就等于账号悄悄死掉、直到全池耗尽才从 503 里看出来。
+// 账号已被停用，因此不会被反复选中，也就不会刷屏。
+func (s *Server) alertDeviceNotTrusted(email, body string) {
+	key := strings.TrimSpace(s.getSettings().BarkKey)
+	if key == "" {
+		return
+	}
+	title := "u1s1 设备账号被拒绝(403)"
+	msg := fmt.Sprintf("账号 %s 已被停用。网关原因：%s。需人工到 u1s1.io 处理（提工单或邮件 contact@u1s1.io）。",
+		store.MaskEmail(email), truncate(body, 180))
+	if ok, err := barkPushFn(key, title, msg, "https://u1s1.io/dashboard"); !ok {
+		logger.Warnf("403 停用告警推送失败: %v", err)
+	}
 }

@@ -32,7 +32,7 @@ func mkDeviceAccount(t *testing.T, fx *fixture, email, tok string, remaining int
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.srv.store.SaveAccountDeviceCredential(a.ID, tok, "u1s1-"+tok, "508", string(pj), string(uj), "dev-"+email); err != nil {
+	if err := fx.srv.store.SaveAccountDeviceCredential(a.ID, tok, "u1s1-"+tok, "508", string(pj), string(uj), "dev-"+email, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := fx.srv.store.MarkAccountCheckin(a.ID, remaining); err != nil {

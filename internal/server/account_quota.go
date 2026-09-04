@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
-	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
 
 // ---- 账号额度视图（管理页/概览展示用） ----
@@ -22,8 +22,8 @@ type accountQuotaItem struct {
 
 // accountQuotaView 账号加量包分组视图：总剩余 + 总容量（进度条）+ 各分组明细。
 type accountQuotaView struct {
-	Total     int64              `json:"total"`     // 剩余合计
-	Capacity  int64              `json:"capacity"`  // 容量合计（进度条分母）
+	Total     int64              `json:"total"`    // 剩余合计
+	Capacity  int64              `json:"capacity"` // 容量合计（进度条分母）
 	UpdatedAt int64              `json:"updated_at"`
 	Items     []accountQuotaItem `json:"items"`
 }
@@ -117,12 +117,12 @@ func (s *Server) refreshAccountQuota(ctx context.Context, id int64) (int64, erro
 	if acc.DeviceToken == "" {
 		return 0, fmt.Errorf("账号 %s 没有设备凭证", acc.EmailMasked)
 	}
-	cred, err := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+	cred, err := s.accountCredential(acc)
 	if err != nil {
 		return 0, err
 	}
 	dc := s.deviceClient()
-	me, err := dc.DeviceMe(ctx, cred)
+	me, err := dc.DeviceMe(ctx, cred, fingerprint.UndiciUserAgent)
 	if err != nil {
 		return 0, err
 	}

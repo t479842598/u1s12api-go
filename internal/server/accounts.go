@@ -71,12 +71,12 @@ func (s *Server) handleQuotaRefreshAll(w http.ResponseWriter, r *http.Request) {
 	for _, a := range accounts {
 		view := buildAccountQuotaView(a)
 		summaries = append(summaries, map[string]any{
-			"id":          a.ID,
+			"id":           a.ID,
 			"email_masked": a.EmailMasked,
-			"total":       view.Total,
-			"capacity":    view.Capacity,
-			"updated_at":  view.UpdatedAt,
-			"items":       view.Items,
+			"total":        view.Total,
+			"capacity":     view.Capacity,
+			"updated_at":   view.UpdatedAt,
+			"items":        view.Items,
 		})
 	}
 	writeAPIData(w, http.StatusOK, map[string]any{
@@ -201,9 +201,9 @@ func (s *Server) handleCheckinOne(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, _ := s.store.GetAccount(id)
 	writeAPIData(w, http.StatusOK, map[string]any{
-		"ok":                       true,
-		"login_checkin_remaining":   acc.LoginCheckinRemaining,
-		"last_checkin_at":           acc.LastCheckinAt,
+		"ok":                      true,
+		"login_checkin_remaining": acc.LoginCheckinRemaining,
+		"last_checkin_at":         acc.LastCheckinAt,
 	})
 }
 

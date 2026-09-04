@@ -155,12 +155,14 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* 指纹档案 */}
+      {/* 请求头指纹（对齐官方 u1s1-cli，terminal surface） */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">请求头指纹</CardTitle>
           <CardDescription>
-            切换后新请求立即生效；档案持久化，重启不变。当前生效：
+            对齐官方 CLI（x-u1s1-client: terminal）。默认 auto = 本机真实环境派生，
+            hostname / platform / 内核 / device_name 互为佐证；切换后新请求立即生效。
+            当前生效：
             <code className="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">
               {data.current_profile}
             </code>
@@ -173,7 +175,6 @@ export default function SettingsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">auto（保持当前档案）</SelectItem>
                 {data.profiles.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.label} — {p.user_agent}
@@ -186,21 +187,28 @@ export default function SettingsPage() {
               onClick={() =>
                 save(
                   { fingerprint_profile: profile },
-                  profile === "auto" ? "保持自动" : `已切换到 ${profile}`,
+                  profile === "auto" ? "已回到本机真实环境" : `已切换到 ${profile}`,
                 )
               }
             >
               应用
             </Button>
           </div>
-          <div className="rounded-md bg-muted p-3 font-mono text-xs leading-relaxed text-muted-foreground">
-            {data.profiles
-              .filter((p) => p.id === data.current_profile)
-              .map((p) => (
-                <pre key={p.id} className="whitespace-pre-wrap">{`User-Agent: ${p.user_agent}
-X-Stainless-Runtime-Version: ${p.runtime}`}</pre>
-              ))}
-          </div>
+          {data.identity && (
+            <pre className="whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs leading-relaxed text-muted-foreground">{`x-u1s1-client:   ${data.identity.x_u1s1_client}
+x-u1s1-platform: ${data.identity.platform}   (内核 ${data.identity.kernel})
+User-Agent:      ${data.identity.user_agent}
+X-Stainless-OS:  ${data.identity.stainless_os} / Arch: ${data.identity.stainless_arch}
+X-Stainless-Runtime-Version: ${data.identity.node_version}
+device_name:     ${data.identity.device_name}${
+              data.identity.auto
+                ? ""
+                : "\n\n⚠ 当前为手工伪装档案；hostname/内核并非本机事实。"
+            }`}</pre>
+          )}
+          <p className="text-xs text-muted-foreground">
+            已授权账号沿用其授权当时的身份快照（一台设备一个系统），切换档案只影响之后新授权的账号。
+          </p>
         </CardContent>
       </Card>
 

@@ -15,44 +15,46 @@ import (
 
 // Settings 运行配置。字段与 .env 键一一对应。
 type Settings struct {
-	Host               string // 监听地址
-	Port               int    // 监听端口
-	AdminPassword      string // 管理后台登录口令
-	UpstreamBaseURL    string // 上游网关，默认 https://api.u1s1.io/v1
-	EgressProxyURL     string // 出口代理（http/https/socks5），空=直连
-	FingerprintProfile string // 头指纹档案：auto | macos-arm64 | macos-x64 | linux-x64 | linux-arm64 | windows-x64
-	U1S1Version        string // x-u1s1-version 头的值（跟随官方 CLI 版本）
-	BarkKey            string // Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
-	SiteFeedCheckHours int    // 官网公告/更新记录检查间隔（小时）
-	LogLevel           string // debug|info|warn|error
-	LogColor           bool
-	Debug              bool
-	QuotaAutoRefresh   bool // 北京时间 0 点额度重置后自动全量刷新上游 Key 配额
-	FirstRun           bool // 本次启动是否新生成了 ADMIN_PASSWORD（用于启动时打印提醒）
+	Host                   string // 监听地址
+	Port                   int    // 监听端口
+	AdminPassword          string // 管理后台登录口令
+	UpstreamBaseURL        string // 上游网关，默认 https://api.u1s1.io/v1
+	EgressProxyURL         string // 出口代理（http/https/socks5），空=直连
+	FingerprintProfile     string // 头指纹档案：auto（默认，取部署机真实环境）| macos-arm64 | macos-x64 | linux-x64 | linux-arm64 | windows-x64
+	FingerprintNodeVersion string // 声称的 x-stainless-runtime-version，空=自动（本机 node，须 >=22.19.0；否则取真实发布值）
+	U1S1Version            string // x-u1s1-version 头的值（跟随官方 CLI 版本）
+	BarkKey                string // Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
+	SiteFeedCheckHours     int    // 官网公告/更新记录检查间隔（小时）
+	LogLevel               string // debug|info|warn|error
+	LogColor               bool
+	Debug                  bool
+	QuotaAutoRefresh       bool // 北京时间 0 点额度重置后自动全量刷新上游 Key 配额
+	FirstRun               bool // 本次启动是否新生成了 ADMIN_PASSWORD（用于启动时打印提醒）
 }
 
 const (
 	DefaultUpstreamBaseURL    = "https://api.u1s1.io/v1"
-	DefaultU1S1Version        = "1.5.0"
+	DefaultU1S1Version        = "1.7.1"
 	DefaultSiteFeedCheckHours = 24
 	defaultProfile            = "auto"
 )
 
 // Env 键名。
 const (
-	KeyHost               = "HOST"
-	KeyPort               = "PORT"
-	KeyAdminPassword      = "ADMIN_PASSWORD"
-	KeyUpstreamBaseURL    = "UPSTREAM_BASE_URL"
-	KeyEgressProxy        = "EGRESS_PROXY"
-	KeyFingerprintProfile = "FINGERPRINT_PROFILE"
-	KeyU1S1Version        = "U1S1_VERSION"
-	KeyBarkKey            = "BARK_KEY"
-	KeySiteFeedCheckHours = "SITEFEED_CHECK_HOURS"
-	KeyLogLevel           = "LOG_LEVEL"
-	KeyLogColor           = "LOG_COLOR"
-	KeyDebug              = "DEBUG"
-	KeyQuotaAutoRefresh   = "QUOTA_AUTO_REFRESH"
+	KeyHost                   = "HOST"
+	KeyPort                   = "PORT"
+	KeyAdminPassword          = "ADMIN_PASSWORD"
+	KeyUpstreamBaseURL        = "UPSTREAM_BASE_URL"
+	KeyEgressProxy            = "EGRESS_PROXY"
+	KeyFingerprintProfile     = "FINGERPRINT_PROFILE"
+	KeyFingerprintNodeVersion = "FINGERPRINT_NODE_VERSION"
+	KeyU1S1Version            = "U1S1_VERSION"
+	KeyBarkKey                = "BARK_KEY"
+	KeySiteFeedCheckHours     = "SITEFEED_CHECK_HOURS"
+	KeyLogLevel               = "LOG_LEVEL"
+	KeyLogColor               = "LOG_COLOR"
+	KeyDebug                  = "DEBUG"
+	KeyQuotaAutoRefresh       = "QUOTA_AUTO_REFRESH"
 )
 
 var mu sync.Mutex
@@ -76,20 +78,21 @@ func Load(projectRoot string) (*Settings, error) {
 	}
 
 	s := &Settings{
-		Host:               getStr(kv, KeyHost, "127.0.0.1"),
-		Port:               getInt(kv, KeyPort, 8080),
-		AdminPassword:      getStr(kv, KeyAdminPassword, ""),
-		UpstreamBaseURL:    strings.TrimRight(getStr(kv, KeyUpstreamBaseURL, DefaultUpstreamBaseURL), "/"),
-		EgressProxyURL:     strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
-		FingerprintProfile: getStr(kv, KeyFingerprintProfile, defaultProfile),
-		U1S1Version:        getStr(kv, KeyU1S1Version, DefaultU1S1Version),
-		BarkKey:            getStr(kv, KeyBarkKey, ""),
-		SiteFeedCheckHours: getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
-		LogLevel:           getStr(kv, KeyLogLevel, "info"),
-		LogColor:           getBool(kv, KeyLogColor, true),
-		Debug:              getBool(kv, KeyDebug, false),
-		QuotaAutoRefresh:   getBool(kv, KeyQuotaAutoRefresh, true), // 默认开启
-		FirstRun:           firstRun,
+		Host:                   getStr(kv, KeyHost, "127.0.0.1"),
+		Port:                   getInt(kv, KeyPort, 8080),
+		AdminPassword:          getStr(kv, KeyAdminPassword, ""),
+		UpstreamBaseURL:        strings.TrimRight(getStr(kv, KeyUpstreamBaseURL, DefaultUpstreamBaseURL), "/"),
+		EgressProxyURL:         strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
+		FingerprintProfile:     getStr(kv, KeyFingerprintProfile, defaultProfile),
+		FingerprintNodeVersion: getStr(kv, KeyFingerprintNodeVersion, ""),
+		U1S1Version:            getStr(kv, KeyU1S1Version, DefaultU1S1Version),
+		BarkKey:                getStr(kv, KeyBarkKey, ""),
+		SiteFeedCheckHours:     getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
+		LogLevel:               getStr(kv, KeyLogLevel, "info"),
+		LogColor:               getBool(kv, KeyLogColor, true),
+		Debug:                  getBool(kv, KeyDebug, false),
+		QuotaAutoRefresh:       getBool(kv, KeyQuotaAutoRefresh, true), // 默认开启
+		FirstRun:               firstRun,
 	}
 	applyOSEnv(s)
 	return s, nil
@@ -148,19 +151,20 @@ func Save(projectRoot string, patch map[string]string) (*Settings, error) {
 
 	kv := readEnvFile(envPath)
 	s := &Settings{
-		Host:               getStr(kv, KeyHost, "127.0.0.1"),
-		Port:               getInt(kv, KeyPort, 8080),
-		AdminPassword:      getStr(kv, KeyAdminPassword, ""),
-		UpstreamBaseURL:    strings.TrimRight(getStr(kv, KeyUpstreamBaseURL, DefaultUpstreamBaseURL), "/"),
-		EgressProxyURL:     strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
-		FingerprintProfile: getStr(kv, KeyFingerprintProfile, defaultProfile),
-		U1S1Version:        getStr(kv, KeyU1S1Version, DefaultU1S1Version),
-		BarkKey:            getStr(kv, KeyBarkKey, ""),
-		SiteFeedCheckHours: getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
-		LogLevel:           getStr(kv, KeyLogLevel, "info"),
-		LogColor:           getBool(kv, KeyLogColor, true),
-		Debug:              getBool(kv, KeyDebug, false),
-		QuotaAutoRefresh:   getBool(kv, KeyQuotaAutoRefresh, true),
+		Host:                   getStr(kv, KeyHost, "127.0.0.1"),
+		Port:                   getInt(kv, KeyPort, 8080),
+		AdminPassword:          getStr(kv, KeyAdminPassword, ""),
+		UpstreamBaseURL:        strings.TrimRight(getStr(kv, KeyUpstreamBaseURL, DefaultUpstreamBaseURL), "/"),
+		EgressProxyURL:         strings.TrimSpace(getStr(kv, KeyEgressProxy, "")),
+		FingerprintProfile:     getStr(kv, KeyFingerprintProfile, defaultProfile),
+		FingerprintNodeVersion: getStr(kv, KeyFingerprintNodeVersion, ""),
+		U1S1Version:            getStr(kv, KeyU1S1Version, DefaultU1S1Version),
+		BarkKey:                getStr(kv, KeyBarkKey, ""),
+		SiteFeedCheckHours:     getInt(kv, KeySiteFeedCheckHours, DefaultSiteFeedCheckHours),
+		LogLevel:               getStr(kv, KeyLogLevel, "info"),
+		LogColor:               getBool(kv, KeyLogColor, true),
+		Debug:                  getBool(kv, KeyDebug, false),
+		QuotaAutoRefresh:       getBool(kv, KeyQuotaAutoRefresh, true),
 	}
 	applyOSEnv(s)
 	return s, nil
@@ -169,19 +173,20 @@ func Save(projectRoot string, patch map[string]string) (*Settings, error) {
 // PatchableFields 把 Settings 序列化成可写回 .env 的键值。
 func PatchableFields(s *Settings) map[string]string {
 	return map[string]string{
-		KeyHost:               s.Host,
-		KeyPort:               strconv.Itoa(s.Port),
-		KeyAdminPassword:      s.AdminPassword,
-		KeyUpstreamBaseURL:    s.UpstreamBaseURL,
-		KeyEgressProxy:        s.EgressProxyURL,
-		KeyFingerprintProfile: s.FingerprintProfile,
-		KeyU1S1Version:        s.U1S1Version,
-		KeyBarkKey:            s.BarkKey,
-		KeySiteFeedCheckHours: strconv.Itoa(s.SiteFeedCheckHours),
-		KeyLogLevel:           s.LogLevel,
-		KeyLogColor:           boolStr(s.LogColor),
-		KeyDebug:              boolStr(s.Debug),
-		KeyQuotaAutoRefresh:   boolStr(s.QuotaAutoRefresh),
+		KeyHost:                   s.Host,
+		KeyPort:                   strconv.Itoa(s.Port),
+		KeyAdminPassword:          s.AdminPassword,
+		KeyUpstreamBaseURL:        s.UpstreamBaseURL,
+		KeyEgressProxy:            s.EgressProxyURL,
+		KeyFingerprintProfile:     s.FingerprintProfile,
+		KeyFingerprintNodeVersion: s.FingerprintNodeVersion,
+		KeyU1S1Version:            s.U1S1Version,
+		KeyBarkKey:                s.BarkKey,
+		KeySiteFeedCheckHours:     strconv.Itoa(s.SiteFeedCheckHours),
+		KeyLogLevel:               s.LogLevel,
+		KeyLogColor:               boolStr(s.LogColor),
+		KeyDebug:                  boolStr(s.Debug),
+		KeyQuotaAutoRefresh:       boolStr(s.QuotaAutoRefresh),
 	}
 }
 
@@ -218,8 +223,9 @@ func readEnvLines(path string) []string {
 # ADMIN_PASSWORD=首次启动自动生成
 # UPSTREAM_BASE_URL=https://api.u1s1.io/v1
 # EGRESS_PROXY=socks5://127.0.0.1:7897
-# FINGERPRINT_PROFILE=auto
-# U1S1_VERSION=1.5.0
+# FINGERPRINT_PROFILE=auto        ← 默认取部署机真实环境（hostname/platform/内核）；填档案 id 可手工伪装
+# FINGERPRINT_NODE_VERSION=         ← 声称的 Node 运行时版本，空=本机 node（须 >=22.19.0）否则取真实发布值
+# U1S1_VERSION=1.7.1
 # BARK_KEY=                  ← Bark 推送密钥（api.day.app/<key>），空=官网动态只入库不推送
 # SITEFEED_CHECK_HOURS=24    ← 官网公告/更新记录检查间隔（小时）
 # QUOTA_AUTO_REFRESH=true   ← 北京时间 0 点额度重置后自动刷新全部上游 Key 配额

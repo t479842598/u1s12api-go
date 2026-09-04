@@ -16,7 +16,7 @@ const modelUnavailableBody = `{"error":{"message":"模型暂时不可用，请�
 
 func newClientForTest(t *testing.T, url string) *Client {
 	t.Helper()
-	fp, err := fingerprint.NewManager(filepath.Join(t.TempDir(), "fp.json"), "linux-x64")
+	fp, err := fingerprint.NewManager(filepath.Join(t.TempDir(), "fp.json"), "linux-x64", "")
 	if err != nil {
 		t.Fatal(err)
 	}

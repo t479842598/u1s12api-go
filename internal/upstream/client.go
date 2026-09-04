@@ -4,6 +4,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,8 +46,11 @@ func NewClient(baseURL string, proxyURL string, fp *fingerprint.Manager, version
 
 func buildTransport(proxyURL string) (http.RoundTripper, error) {
 	t := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		ForceAttemptHTTP2:     true,
+		Proxy: http.ProxyFromEnvironment,
+		// 与官方对齐：allowH2:false → 只说 HTTP/1.1；解压自己接手（见 wire.go）。
+		ForceAttemptHTTP2:     false,
+		DisableCompression:    true,
+		TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
@@ -105,12 +109,12 @@ func (c *Client) Version() string { return c.version() }
 
 // ModelDef /models 返回的模型定义（字段名对齐上游）。
 type ModelDef struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Reasoning     bool    `json:"reasoning"`
-	ContextLength int64   `json:"context_length"`
-	MaxTokens     int64   `json:"max_tokens"`
-	Price         Price   `json:"price"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Reasoning     bool   `json:"reasoning"`
+	ContextLength int64  `json:"context_length"`
+	MaxTokens     int64  `json:"max_tokens"`
+	Price         Price  `json:"price"`
 }
 
 // Price 每百万 token 美元价。
@@ -141,27 +145,28 @@ func (c *Client) do(ctx context.Context, method, path string, headers map[string
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	if req.Header.Get("User-Agent") == "" {
-		// 兼容兜底：调用方忘了给 UA 时补上官方辅助端点的运行时 UA（桌面端 undici）。
-		// Go 会默认补 "Go-http-client/1.1"，那是明显的非官方指纹，必须覆盖。
-		req.Header.Set("User-Agent", fingerprint.UndiciUserAgent)
-	}
+	ApplyWireHeaders(req, headers)
 	if body != nil && req.Header.Get("content-type") == "" {
-		req.Header.Set("content-type", "application/json")
+		SetWireHeader(req.Header, "content-type", "application/json")
 	}
 	return c.http.Do(req)
 }
 
+// auxUA 辅助端点的运行时 UA。官方 CLI 不装 undici dispatcher，裸 fetch 发 node；
+// 只有桌面端（Next.js instrumentation 里 undici.install）与 CLI 进 TUI 之后才发 undici。
+// 本项目对齐 CLI，且 /models 与 /me 都由服务进程直发 → node。
+func auxUA() string { return fingerprint.NodeUserAgent }
+
 // Models 拉取模型列表。
 func (c *Client) Models(ctx context.Context, apiKey string) (*ModelsResponse, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/models", fingerprint.AuxHeaders(apiKey, c.version()), nil)
+	resp, err := c.do(ctx, http.MethodGet, "/models", fingerprint.AuxHeaders(apiKey, c.version(), auxUA()), nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, err
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
@@ -178,11 +183,14 @@ func (c *Client) Models(ctx context.Context, apiKey string) (*ModelsResponse, er
 
 // Me 查询配额。
 func (c *Client) Me(ctx context.Context, apiKey string) (*MeInfo, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/me", fingerprint.AuxHeaders(apiKey, c.version()), nil)
+	resp, err := c.do(ctx, http.MethodGet, "/me", fingerprint.AuxHeaders(apiKey, c.version(), auxUA()), nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, err
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
@@ -205,9 +213,15 @@ func (c *Client) RawDo(req *http.Request) (*http.Response, error) {
 // Chat 转发 chat/completions。成功时返回原始响应（流式 SSE 或 JSON），
 // 调用方负责 Close；失败（状态码>=400）返回 *APIError。
 func (c *Client) Chat(ctx context.Context, apiKey string, body []byte) (*http.Response, error) {
-	headers := c.fp.ChatHeaders(apiKey, c.version())
+	headers := fingerprint.ChatFingerprintHeaders(c.fp.Current(), c.version(), "")
+	headers["authorization"] = "Bearer " + apiKey
+	headers["content-type"] = "application/json"
 	resp, err := c.do(ctx, http.MethodPost, "/chat/completions", headers, body)
 	if err != nil {
+		return nil, err
+	}
+	if err := decodeResponseBody(resp); err != nil {
+		defer resp.Body.Close()
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
@@ -323,14 +337,30 @@ func RequestScopedError(statusCode int, body string) bool {
 // **请求级**（请求体不合法，见 RequestScopedError）或**网关级**（如 503 model_unavailable，
 // 与用哪把凭证无关），轮换无益，应立即透传，避免把一次客户端请求放大成 N 次上游调用、
 // 并在官方风控里留下「同内容跨多凭证重复请求」特征。
+//
+// 注意：**403 不在这里**。官方 u1s1-cli 1.7.1 给 403 新增了新语义（api.js 的
+// AccessDeniedError）：封禁/停用/设备不受信任，**重新登录也没用**，CLI 命中后直接
+// process.exit(1) 停止一切请求。把它归为“可轮换”等于对一台已被判不受信任的设备
+// 反复敲门，那本身就是“不是人”的特征。403 由 DeviceNotTrusted 单独处理。
 func CredentialScopedError(statusCode int, body string) bool {
 	if statusCode == http.StatusUnauthorized || // 401 凭证无效
 		statusCode == http.StatusPaymentRequired || // 402 额度/付费
-		statusCode == http.StatusForbidden || // 403（设备令牌失效、换设备等）
 		statusCode == http.StatusTooManyRequests { // 429 限流/额度
 		return true
 	}
 	return false
+}
+
+// DeviceCredentialRetired 401：设备被移除或换过钥匙（官方 AuthError）。
+// 账号本身没问题，**重新授权可恢复**，所以只标记 authorized=0、不动 enabled。
+func DeviceCredentialRetired(statusCode int) bool {
+	return statusCode == http.StatusUnauthorized
+}
+
+// DeviceNotTrusted 403：官方 AccessDeniedError 语义（封禁/停用/设备不受信任）。
+// 重登也没用，必须停用该账号并告警，不再拿它去敲门。
+func DeviceNotTrusted(statusCode int, body string) bool {
+	return statusCode == http.StatusForbidden
 }
 
 // KeyClientOnlyRejected 识别网关「旧版 u1s1- API Key 推理通道已被关闭」的 403。

@@ -32,8 +32,8 @@ type pendingDevice struct {
 
 // deviceMu 保护 pendingDevices 与签到互斥。
 type pendingDeviceMap struct {
-	mu   sync.Mutex
-	m    map[int64]*pendingDevice
+	mu sync.Mutex
+	m  map[int64]*pendingDevice
 }
 
 func (p *pendingDeviceMap) put(d *pendingDevice) {
@@ -81,11 +81,11 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusServiceUnavailable, "设备客户端不可用（检查上游地址/出口代理）")
 		return
 	}
-	// 设备名带账号 email，便于在批准页识别。
-	devName := "u1s12api-" + acc.Email
-	if len(devName) > 60 {
-		devName = devName[:60]
-	}
+	// 设备名按官方格式 `<hostname> (<platform>)` 生成（设计 D-05）。
+	// 以前这里发的是 "u1s12api-<邮箱>"：那个值会永久落在网关的设备记录里，并且
+	// 显示在用户自己的官网设备管理页上——人工复核时它就是自供状。账号识别信息
+	// 改存本地 accounts.note，不上网。
+	devName := s.fp.DeviceName()
 	privJWK, pubJWK, start, err := dc.StartDeviceLoginGenerate(r.Context(), devName, s.getSettings().U1S1Version)
 	if err != nil {
 		writeAPIError(w, http.StatusBadGateway, "发起设备登录失败: "+err.Error())
@@ -150,7 +150,7 @@ func (s *Server) handleDeviceConfirm(w http.ResponseWriter, r *http.Request) {
 	privJSON, _ := json.Marshal(pd.privJWK)
 	pubJSON, _ := json.Marshal(pd.pubJWK)
 	if err := s.store.SaveAccountDeviceCredential(id, resp.DeviceToken, resp.APIKey, resp.DeviceID.String(),
-		string(privJSON), string(pubJSON), pd.deviceName); err != nil {
+		string(privJSON), string(pubJSON), pd.deviceName, s.currentIdentityJSON()); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "保存设备凭证失败: "+err.Error())
 		return
 	}

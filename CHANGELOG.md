@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.10.0 (2026-09-05)
+
+对齐目标从「桌面客户端」改为「官方 u1s1-cli（terminal）」，并把上游请求从「头值大致对」修到「逐头逐字节对」：连接层、头名大小写、缺失头、压缩、身份来源、设备名、attestation 生命周期、401/403 处置全部按官方实测行为重做。
+
+### 破坏性变更
+
+- **`x-u1s1-client` 由 `desktop` 改为 `terminal`**，`U1S1_VERSION` 默认 `1.5.0` → **`1.7.1`**（ADR 0001）。桌面端 0.1.9→0.1.11→0.1.15 三次都仍内嵌 CLI **1.3.0**，`desktop` + 新版本是现实中不存在的组合；且桌面端 Node 内嵌固定 v22.23.1，轮转多套 runtime 版本在 desktop 口径下同样不可能
+- **身份改为部署机真实环境派生**（ADR 0002）：不再随机/轮转 5 套内置假档案，`hostname` / `os.platform()` / 内核版本 / `arch` / `device_name` 全部取本机事实（`os.Hostname` + `uname -r` + GOARCH 映射）。`FINGERPRINT_PROFILE` 降级为手工伪装逃生口；旧 `data/fingerprint.json`（schema<2）启动时一次性迁移到 auto
+- **403 不再当「可轮换」处理**：命中即停用该账号 + Bark 告警 + 停止换下一个账号重试同一请求（官方 1.7.1 语义，见下）。`CredentialScopedError` 已移除 403
+- **DB 迁移**：`accounts` 新增 `device_identity`（授权当时的身份快照）与 `device_status_reason`（网关拒绝原因）两列，幂等 `ALTER TABLE`
+
+### 新增
+
+- **`internal/upstream/wire.go`（线格式层）**：`SetWireHeader` 用小写头名写头（绕过 Go 的 `CanonicalMIMEHeaderKey`），`decodeResponseBody` 自行解压上游响应。头名大小写、缺失头、压缩这三件事此前无处安放，混在 `device.go` 里逐处 `Header.Set`，所以漏了 4 个头且大小写全错
+- **补齐 4 个官方 100% 会发的头**：`accept`（chat `application/json` / 其余 `*/*`）、`accept-language: *`、`sec-fetch-mode: cors`、`connection: keep-alive`；`accept-encoding` 由 `gzip` 改为官方的 `gzip, deflate`
+- **`FINGERPRINT_NODE_VERSION`**：显式指定声称的 Node 版本；留空则取本机 `node --version`，**低于官方 CLI `engines.node >= 22.19.0` 时弃用**（那等于报一个跑不起官方 CLI 的运行时），再退到真实发布集合按主机名确定性取一个并持久化
+- **设备信任状态治理**：401 → `authorized=0` + 原因入库（重授权可恢复，不动 `enabled`）；403 → `enabled=0` + 原因入库 + Bark 告警「需人工到 u1s1.io 处理」。后台账号列表显示拒绝原因、停用标记与「设备名为旧版格式，重新授权可刷新」提示；设置页显示当前身份全貌（platform / 内核 / hostname / Node 版本 / device_name / surface）
+- **身份按账号绑定**：授权时把身份快照写入 `accounts.device_identity`，此后该账号所有请求用它；快照缺失时回退全局并幂等回填（`SetAccountDeviceIdentity` 带 `AND device_identity=''` 条件，绝不覆盖已绑定身份）。后台切档案不再让所有已授权设备同时「换系统」
+
+### 修复
+
+- **上游请求改走 HTTP/1.1**（`ForceAttemptHTTP2:false` + `TLSClientConfig.NextProtos:[http/1.1]` + `DisableCompression:true`，两条通道都改）。官方 `pi-coding-agent` 的 `http-dispatcher.js:74` 写死 `allowH2:false`，实测 Node 内置 fetch 与桌面端内嵌的独立 undici 8.5.0 面对提供 h2 的 `api.u1s1.io` **都协商到 HTTP/1.1**，而我们此前说 HTTP/2 —— 这是每个连接可见、任何头对齐都盖不住的差异
+- **attestation 签发失败新增 30s 冷却**（对齐官方 `ATTESTATION_REFRESH_COOLDOWN_MS`）：此前失败不缓存，上游黑洞时**每个 chat 请求都要串行再探一次 `/v1/models`**（最坏各 +30s），并把 models:chat 比例推成 1:1（官方约 1:几千）。同时刷新窗口 6h → **24h**（官方 `ATTESTATION_REFRESH_MARGIN_MS`），无令牌时最多为一个请求等 4s
+- **`device_name` 改用官方格式 `<hostname> (<platform>)`**（`login.js`）：此前发的是 `u1s12api-<邮箱>` 与 `u1s12api-oneclick`，该值会永久落在网关设备记录里并显示在用户官网设备管理页上，等于自证代理身份。账号识别信息改存本地 `accounts.note`
+- **设备登录响应加官方边界校验**：`interval` 夹 1–30、`expires_in` 夹 1–1800（此前服务端返 86400 我们就会轮询一天）、`api_key` 前缀 `u1s1-`、`device_token` 前缀 `u1s1d-`、长度 ≤4096、无控制字符、`verify_url` 必须 http/https 且不含账号密码
+- **裸 fetch 的 UA 随 dispatcher 安装时机区分**：每个凭证首次取 `/models` 发 `node`（CLI 启动阶段），会话中途刷新发 `undici`（CLI 进 TUI 后 `interactive-mode.js:1529` 才装 dispatcher）
+
+### 逆向核对（桌面端 0.1.15 + CLI 1.7.1，2026-09-04）
+
+- **桌面端 0.1.15 请求链路零变化**：内嵌仍是 u1s1-cli 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0；`latest.json` 发布目标只有 `darwin-aarch64` 与 `windows-x86_64`（无 linux），故真实桌面端的 `x-u1s1-platform` 只有两种取值
+- **CLI 1.5.0 → 1.7.1（中间还有 1.6.0/1.7.0）**：`device-auth.js` 与 `config.js` **逐字节未变**，`login.js` 只多一行 `console.log` —— DPoP 结构、签名代理、头集合零变化，只需跟版本号
+- **CLI 1.7.1 唯一与本项目相关的新增**：`api.js` 的 `AccessDeniedError` —— 官方把 403 定性为「封禁/停用/**设备不受信任**，重新登录也没用」，`index.js:205-208` 命中后直接 `process.exit(1)` 停止一切请求。这是本次 401/403 分流的直接依据
+- **`engines.node >= 22.19.0`**：约束我们可声称的 Node 版本下限
+- **不仿 telemetry**：1.3.0 的 dist 里没有 `telemetry.js`（桌面端压根不发），1.5.0+ 才有；仿了反而比真实桌面端多出一个不存在的行为
+
+### 验证
+
+- **逐头零差异**：用 `docs/repro/desktop-fingerprint-capture.mjs` 取官方 CLI 1.7.1 抓包，与本项目裸 TCP dump 程序化 diff —— `/v1/chat/completions` 与 `/v1/models` 的「官方有我们缺」「我们有官方无」「值不一致」三项均为空（排除端口/夹具/密钥差异）
+- **真实网关活体复验**（生产凭证，`U1S1_REAL_CHAT=1`）：attestation 正常签发（payload `v=1 u=463 d=1483`，TTL 168h，缓存命中 1µs），真实 chat **HTTP 200** —— 网关接受 HTTP/1.1 + 全小写头 + `terminal` + `1.7.1` + 新 `device_name` 组合
+- 新增测试 30+ 个：`wire_test.go`（Transport 白盒断言、只接受 h2 的服务应握手失败、chat/aux/auth 三线格式、gzip/deflate/identity/未知编码四态解压、失败只探一次、边界夹值、按账号身份）、`fingerprint_test.go`（身份五者自洽、engines 下限、`device_name` 正则与无项目标识、SDK 平台映射逐项、auto 默认与旧状态迁移、Node 版本跨重启稳定、快照往返）、`device_trust_test.go`（403 停用+停轮换+告警、401 标记需重授权、推理永不走 Key 通道、回填真实写入且幂等）
+- `go build ./...` + `go vet ./...` + `go test ./...` 全绿；前端 `npm run build` 成功
+
+### 已知无法对齐的残差（Go 的 net/http 与 crypto/tls 决定）
+
+1. **头顺序**：Go 按字母序写、undici 按插入序（要消除需自研 h1 写器，约 200–250 行高风险代码，收益未证实）
+2. **`Host` / `Content-Length` / `User-Agent` 的大小写**：Go 的 `Request.write` 硬写规范形式（其余头名含 `connection` 已全部小写）
+3. **TLS ClientHello**：Go crypto/tls 与 Node/BoringSSL 天然不同（JA3/JA4 层面）
+
+### 升级注意
+
+- 生产 `.env` 需把 `U1S1_VERSION` 改到 `1.7.1`（或删掉该行取新默认值）
+- 已授权账号会出现一次性的 platform 跳变（从假档案切到真实主机）。建议方便时在后台对每个账号点一次「授权」：既刷新 platform，也把网关侧的旧设备名换成官方格式
+- 若某账号被网关以 403 拒绝，服务会自动停用并推送告警，需人工到 u1s1.io 处理（提工单或 contact@u1s1.io），不是重新授权能解决的
+
 ## v0.9.9 (2026-09-04)
 
 ### 修复

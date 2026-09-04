@@ -56,10 +56,12 @@ func deviceCredential(t *testing.T) *DeviceCredential {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lp, _ := fingerprint.ProfileByID("linux-x64")
 	return &DeviceCredential{
 		DeviceToken: "u1s1d-abcdef123456",
 		PrivateJWK:  privJWK,
 		PublicJWK:   pubJWK,
+		Profile:     lp,
 	}
 }
 
@@ -67,7 +69,7 @@ func deviceCredential(t *testing.T) *DeviceCredential {
 // 且鉴权为 DPoP。
 func TestDeviceMeSendsVersionHeader(t *testing.T) {
 	dc, captured := deviceFixture(t)
-	if _, err := dc.DeviceMe(context.Background(), deviceCredential(t)); err != nil {
+	if _, err := dc.DeviceMe(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent); err != nil {
 		t.Fatalf("DeviceMe 失败: %v", err)
 	}
 	h := captured()
@@ -98,7 +100,7 @@ func TestDeviceChatClientFingerprint(t *testing.T) {
 	h := captured()
 	checks := map[string]string{
 		"X-U1s1-Version":              "1.3.1",
-		"X-U1s1-Client":               "desktop", // 对齐桌面客户端（CLI 才是 terminal）
+		"X-U1s1-Client":               "terminal", // 对齐官方 CLI（桌面端才是 desktop）
 		"X-U1s1-Platform":             "linux-x64",
 		"User-Agent":                  fingerprint.UserAgent(fingerprint.Profiles[2]), // linux-x64
 		"X-Stainless-Lang":            "js",
@@ -143,7 +145,7 @@ func TestDeviceChatSendsAttestation(t *testing.T) {
 // TestDeviceModelsParsesAttestation GET /v1/models 应解析 client_attestation.token 与过期时刻。
 func TestDeviceModelsParsesAttestation(t *testing.T) {
 	dc, _ := deviceFixture(t)
-	res, err := dc.DeviceModels(context.Background(), deviceCredential(t))
+	res, err := dc.DeviceModels(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent)
 	if err != nil {
 		t.Fatalf("DeviceModels 失败: %v", err)
 	}
@@ -166,7 +168,7 @@ func TestDeviceModelsNoAttestation(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.1" }, nil)
-	res, err := dc.DeviceModels(context.Background(), deviceCredential(t))
+	res, err := dc.DeviceModels(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent)
 	if err != nil {
 		t.Fatalf("DeviceModels 失败: %v", err)
 	}
@@ -189,14 +191,14 @@ func TestAttestationPayloadDecode(t *testing.T) {
 	}
 }
 
-// ---- 桌面客户端对齐（v0.9.7 逆向核对）----
+// ---- CLI（terminal）对齐（spec 04 / ADR 0001）----
 
-// TestDeviceChatSurfaceIsDesktop x-u1s1-client 必须是 desktop。
-// 桌面客户端（app 0.1.9）经 u1s1-cli/embed 调 ensureSigningProxy(cfg, "desktop", ...)；
-// 只有 CLI TUI 才发 terminal。本项目对齐桌面客户端，写死断言防回退。
-func TestDeviceChatSurfaceIsDesktop(t *testing.T) {
-	if fingerprint.ClientSurface != "desktop" {
-		t.Fatalf("fingerprint.ClientSurface = %q, 期望 desktop", fingerprint.ClientSurface)
+// TestDeviceChatSurfaceIsTerminal x-u1s1-client 必须是 terminal。
+// 官方 CLI TUI 调 ensureSigningProxy(cfg, "terminal", ...)；桌面端才发 desktop。
+// 桌面端 0.1.15 仍内嵌 CLI 1.3.0，desktop+新版本是现实中不存在的组合，故对齐 CLI。
+func TestDeviceChatSurfaceIsTerminal(t *testing.T) {
+	if fingerprint.ClientSurface != "terminal" {
+		t.Fatalf("fingerprint.ClientSurface = %q, 期望 terminal", fingerprint.ClientSurface)
 	}
 	dc, captured := deviceFixture(t)
 	resp, err := dc.DeviceChat(context.Background(), deviceCredential(t),
@@ -205,12 +207,12 @@ func TestDeviceChatSurfaceIsDesktop(t *testing.T) {
 		t.Fatalf("DeviceChat 失败: %v", err)
 	}
 	resp.Body.Close()
-	if got := captured().Get("x-u1s1-client"); got != "desktop" {
-		t.Errorf("x-u1s1-client = %q, 期望 desktop", got)
+	if got := captured().Get("x-u1s1-client"); got != "terminal" {
+		t.Errorf("x-u1s1-client = %q, 期望 terminal", got)
 	}
 }
 
-// TestDeviceChatKeepsStainlessHeaders 桌面端 chat 请求确实带 X-Stainless-*（7 个）。
+// TestDeviceChatKeepsStainlessHeaders CLI chat 请求确实带 X-Stainless-*（7 个）。
 // 抓包证据：桌面端 agent server 用 pi-ai 的 openai-completions（openai SDK 6.40.0）发请求，
 // SDK 的 getPlatformHeaders() 无条件附加这些头，签名代理 requestHeaders() 只剔除
 // host/connection/content-length/authorization/dpop，其余原样转发。
@@ -229,7 +231,7 @@ func TestDeviceChatKeepsStainlessHeaders(t *testing.T) {
 		"X-Stainless-Retry-Count",
 	} {
 		if h.Get(k) == "" {
-			t.Errorf("桌面端 chat 应带 %s，实际缺失", k)
+			t.Errorf("CLI chat 应带 %s，实际缺失", k)
 		}
 	}
 	// chat 用 SDK 的 pi UA，不是 undici（undici 只出现在裸 fetch 的辅助端点）。
@@ -238,26 +240,26 @@ func TestDeviceChatKeepsStainlessHeaders(t *testing.T) {
 	}
 }
 
-// TestAuxEndpointsSendUndiciUserAgent /v1/me 与 /v1/models 是裸 fetch，
-// 桌面端在 Next.js instrumentation 里执行过 undici.install()，因此 UA 是 undici。
+// TestAuxEndpointsSendNodeUserAgent CLI 不装 undici dispatcher，/v1/me 与 /v1/models 是
+// Node 内置 fetch，UA 为 node；进程装了 dispatcher 后（会话中途刷新）才是 undici。
 // （回归点：Go 默认会发 Go-http-client/1.1。）
-func TestAuxEndpointsSendUndiciUserAgent(t *testing.T) {
+func TestAuxEndpointsSendNodeUserAgent(t *testing.T) {
 	dc, captured := deviceFixture(t)
 
-	me, err := dc.DeviceMe(context.Background(), deviceCredential(t))
+	me, err := dc.DeviceMe(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent)
 	if err != nil {
 		t.Fatalf("DeviceMe 失败: %v", err)
 	}
 	_ = me
-	if got := captured().Get("User-Agent"); got != "undici" {
-		t.Errorf("/me User-Agent = %q, 期望 undici", got)
+	if got := captured().Get("User-Agent"); got != "node" {
+		t.Errorf("/me User-Agent = %q, 期望 node", got)
 	}
 
-	if _, err := dc.DeviceModels(context.Background(), deviceCredential(t)); err != nil {
+	if _, err := dc.DeviceModels(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent); err != nil {
 		t.Fatalf("DeviceModels 失败: %v", err)
 	}
-	if got := captured().Get("User-Agent"); got != "undici" {
-		t.Errorf("/models User-Agent = %q, 期望 undici", got)
+	if got := captured().Get("User-Agent"); got != "node" {
+		t.Errorf("/models User-Agent = %q, 期望 node", got)
 	}
 	// 辅助端点不带 X-Stainless-*（那些只属于 SDK 的 chat 请求）。
 	if got := captured().Get("X-Stainless-Lang"); got != "" {
@@ -265,7 +267,7 @@ func TestAuxEndpointsSendUndiciUserAgent(t *testing.T) {
 	}
 }
 
-// TestDeviceLoginRequestFingerprint /auth/device/start：裸 fetch（UA=undici）+
+// TestDeviceLoginRequestFingerprint /auth/device/start：裸 fetch（CLI UA=node）+
 // public_jwk 按官方键序提交。
 func TestDeviceLoginRequestFingerprint(t *testing.T) {
 	var gotUA string
@@ -283,8 +285,8 @@ func TestDeviceLoginRequestFingerprint(t *testing.T) {
 	if _, err := dc.StartDeviceLogin(context.Background(), pub, "test-device", "1.4.1"); err != nil {
 		t.Fatalf("StartDeviceLogin 失败: %v", err)
 	}
-	if gotUA != "undici" {
-		t.Errorf("auth UA = %q, 期望 undici", gotUA)
+	if gotUA != "node" {
+		t.Errorf("auth UA = %q, 期望 node", gotUA)
 	}
 	wantJwk := `{"key_ops":["verify"],"ext":true,"kty":"EC","x":"AAA","y":"BBB","crv":"P-256"}`
 	if !strings.Contains(string(gotBody), `"public_jwk":`+wantJwk) {

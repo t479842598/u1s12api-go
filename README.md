@@ -5,7 +5,7 @@
 ## 特性
 
 - **OpenAI 兼容**：`GET /v1/models`、`POST /v1/chat/completions`（流式 / 非流式）
-- **请求头指纹模拟**：与官方 u1s1-cli 1.5.0 完全一致（UA + X-Stainless-* + x-u1s1-version + x-u1s1-client + x-u1s1-platform + x-u1s1-attestation）
+- **请求头指纹模拟**：与官方 u1s1-cli 1.7.1 逐头逐字节对齐（HTTP/1.1 + 小写头名 + UA + X-Stainless-* + x-u1s1-version/client/platform/attestation），身份由部署机真实环境派生
 - **官网账号 + 设备授权**：后台录入官网账号（邮箱+密码），发起设备授权领回 `u1s1d-` 设备凭证（DPoP 签名），网关即被识别为官方客户端，消耗「仅限 u1s1 客户端使用」的加量包
 - **每日自动签到**：每天北京时间 0 点后用设备凭证调 `/v1/me` 自动领取每日打卡 200 万 Token 加量包
 - **设备凭证优先转发**：有已授权账号时聊天转发优先走设备凭证通道（消耗客户端量包），失败回退 `u1s1-` Key 池
@@ -41,7 +41,8 @@ open http://127.0.0.1:8080/admin/
 | `UPSTREAM_BASE_URL` | `https://api.u1s1.io/v1` | 上游网关 |
 | `EGRESS_PROXY_URL` | 空（直连） | 出口代理 `http://`/`socks5://` |
 | `FINGERPRINT_PROFILE` | `auto` | 头指纹档案 |
-| `U1S1_VERSION` | `1.5.0` | x-u1s1-version 头 |
+| `U1S1_VERSION` | `1.7.1` | x-u1s1-version 头（跟随官方 CLI npm latest） |
+| `FINGERPRINT_NODE_VERSION` | 空 | 声称的 `x-stainless-runtime-version`；空=本机 node（须 ≥22.19.0）否则取真实发布值并持久化 |
 | `LOG_LEVEL` | `info` | 日志级别 |
 | `QUOTA_AUTO_REFRESH` | `true` | 北京时间 0 点后自动全量刷新上游 Key 配额 |
 
@@ -55,28 +56,41 @@ open http://127.0.0.1:8080/admin/
 | `linux-arm64` | `pi (linux 6.8.0-45-generic; arm64)` |
 | `windows-x64` | `pi (win32 10.0.26100; x64)` |
 
-选择 `auto` 时，首次启动随机选取一个档案并持久化到 `data/fingerprint.json`。
+选择 `auto`（默认）时，身份由**部署机真实环境**派生：`os.Hostname()` + `uname -r` 内核版本 +
+GOARCH→node arch 映射，写入 `data/fingerprint.json`。只有 Node 版本是声称值（我们不是 Node 进程），
+受官方 CLI `engines.node >= 22.19.0` 约束，且解析一次后长期沿用，不会每次重启漂移。
 
 ### 对齐的是哪个官方客户端
 
-官方有两个发请求的入口，**只有两处差异**，本项目对齐桌面客户端：
+官方有两个发请求的入口，用的是**同一份 `device-auth.js`**（1.5.0→1.7.1 逐字节未变），
+头集合与 DPoP 结构完全相同，真实差异只有两处。本项目对齐 **CLI（terminal）**：
 
-| 项 | 桌面客户端 0.1.9 / 0.1.11 | u1s1-cli 1.5.0 | 本项目 |
+| 项 | u1s1-cli 1.7.1 | 桌面客户端 0.1.15 | 本项目 |
 |---|---|---|---|
-| `x-u1s1-client` | `desktop` | `terminal` | `desktop` |
-| 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `undici` | `node` | `undici` |
+| `x-u1s1-client` | `terminal` | `desktop` | **`terminal`** |
+| 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `node` | `undici` | **`node`**（会话中途刷新用 `undici`） |
+| `x-u1s1-version` | `1.7.1` | `1.3.0`（内嵌 CLI 版本） | **`1.7.1`** |
 | chat UA / `X-Stainless-*` / `x-u1s1-platform` / DPoP 结构 | 相同 | 相同 | 已对齐 |
 
-已复核到 **桌面端 0.1.11** 与 **CLI 1.5.0**（2026-09-04）：桌面端与 0.1.9 相比指纹/请求头**零变化**（内嵌仍是
-u1s1-cli 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0，签名代码逐字节相同，实跑抓包亦相同）；CLI 1.4.1→1.5.0 也**零变化**（仅版本号，`dpopHeaders` 逐字相同，新增的只有响应转发修复与公告轮询端点）。
-下次真正需要同步的触发条件：桌面端内嵌的 u1s1-cli 不再是 1.3.0，或 npm `u1s1-cli` 超过 1.5.0
-（后者是 `x-u1s1-version` 的取值）。复核记录与跑法见脚本头注释。
+**为什么不再对齐桌面端**（ADR 0001）：桌面端 0.1.9→0.1.11→0.1.15 三次都仍内嵌 CLI **1.3.0**，
+而 npm CLI 已到 1.7.1 —— `desktop` + 新版本是现实中不存在的组合；且桌面端 Node 内嵌固定
+v22.23.1，轮转多套 runtime 版本在 desktop 口径下同样不可能。CLI 通道下这些值都真实存在。
 
-桌面客户端不是另一套实现：它把 u1s1-cli 当库用（`node_modules/u1s1-cli` 1.3.0 + 自带 Node 22.23.1），
-经 `u1s1-cli/embed` 调 `ensureSigningProxy(cfg, "desktop", attestation)`；CLI 自己传 `"terminal"`。
-`undici` 这个 UA 则来自桌面端 Next.js server 的 `instrumentation.js`：它先跑 pi-coding-agent 的
-`configureHttpDispatcher()` → `undici.install()`，把 `globalThis.fetch` 换成独立 undici 8.5.0，
-之后所有裸 fetch 都带 `user-agent: undici`。
+**为什么身份要取真实主机**（ADR 0002）：官方 CLI 报出的 hostname / platform / 内核版本 /
+`device_name` 全部来自本机事实、互为佐证。轮转假档案会让这几项互相矛盾，而网关明确说它用
+「组合证据」持续观察。已授权账号沿用**授权当时**的身份快照（`accounts.device_identity`），
+后台切档案不影响它们 —— 真实世界里一台设备就是一个操作系统。
+
+已复核到 **CLI 1.7.1** 与 **桌面端 0.1.15**（2026-09-04）：请求链路**零变化**
+（`device-auth.js`/`config.js` 逐字节相同，`login.js` 只多一行日志）；1.7.1 唯一与本项目相关的
+新增是 `api.js` 的 `AccessDeniedError` —— 官方把 **403 定性为「封禁/停用/设备不受信任，重登也没用」
+并直接 `process.exit(1)`**，我们据此把 401 与 403 分流处置（403 停用账号 + Bark 告警 + 停止轮换）。
+下次需要同步的触发条件：npm `u1s1-cli` 超过 1.7.1（那是 `x-u1s1-version` 的取值）、本脚本输出
+出现新增/缺失的头、或官方 `engines.node` 下限变了。复核记录与跑法见脚本头注释。
+
+除头集合外，本项目还复刻了官方三个**行为**特征：attestation 的 24h 提前刷新与失败后 30s 冷却
+（官方 `device-auth.js` 的三个常量）、`device_name` 的官方格式、以及裸 fetch 的 UA 随
+dispatcher 安装时机从 `node` 变 `undici`。
 
 DPoP 证明与官方逐字节对齐（header 段的 JSON 是 ES256 签名输入的一部分）：
 
@@ -86,6 +100,16 @@ DPoP 证明与官方逐字节对齐（header 段的 JSON 是 ES256 签名输入�
 
 逐头核对与复现：`docs/repro/desktop-fingerprint-capture.mjs`（本地 mock 网关 + 官方签名代理，
 不碰真实网关、不消耗额度；每次官方发版后跑一遍）。
+
+### 已知无法对齐的残差
+
+以下三项由 Go 的 `net/http` 与 `crypto/tls` 决定，头集合/大小写/值/协议已一致，但要消除它们
+需要自研 HTTP/1.1 写器或走真 Node sidecar，收益未证实，暂不做（详见 `internal/upstream/wire.go` 包注释）：
+
+1. **头顺序**：Go 按字母序写，undici 按插入序写。
+2. **`Host` / `Content-Length` / `User-Agent` 的大小写**：Go 的 `Request.write` 硬写规范形式
+   （其余头名已全部小写，含 `connection: keep-alive`，与官方一致）。
+3. **TLS ClientHello**：Go crypto/tls 与 Node/BoringSSL 天然不同（JA3/JA4 层面）。
 
 ## 项目结构
 

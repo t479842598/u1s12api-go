@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
 	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
@@ -91,7 +92,7 @@ func (s *Server) handleOneClickStart(w http.ResponseWriter, r *http.Request) {
 		expiresIn:  start.ExpiresIn,
 		privJWK:    privJWK,
 		pubJWK:     pubJWK,
-		deviceName: "u1s12api-oneclick",
+		deviceName: s.fp.DeviceName(), // 官方格式，不带本项目标识
 		startedAt:  time.Now(),
 	})
 	logger.Infof("一键登录已发起: session=%s verify_url=%s", sessionID, start.VerifyURL)
@@ -145,9 +146,10 @@ func (s *Server) handleOneClickConfirm(w http.ResponseWriter, r *http.Request) {
 
 	// 批准成功。取邮箱：用设备凭证调 /v1/me；失败时用 device_id 兜底。
 	email := ""
-	cred, cerr := upstream.AccountToCredential(resp.DeviceToken, string(mustJSON(pd.privJWK)), string(mustJSON(pd.pubJWK)))
+	cred, cerr := upstream.AccountToCredential(resp.DeviceToken, string(mustJSON(pd.privJWK)), string(mustJSON(pd.pubJWK)),
+		"", s.fp.Current())
 	if cerr == nil {
-		if me, merr := dc.DeviceMe(ctx, cred); merr == nil && me.Email != "" {
+		if me, merr := dc.DeviceMe(ctx, cred, fingerprint.UndiciUserAgent); merr == nil && me.Email != "" {
 			email = me.Email
 		}
 	} else {
@@ -183,7 +185,7 @@ func (s *Server) handleOneClickConfirm(w http.ResponseWriter, r *http.Request) {
 	privJSON := mustJSON(pd.privJWK)
 	pubJSON := mustJSON(pd.pubJWK)
 	if err := s.store.SaveAccountDeviceCredential(accountID, resp.DeviceToken, resp.APIKey,
-		resp.DeviceID.String(), string(privJSON), string(pubJSON), pd.deviceName); err != nil {
+		resp.DeviceID.String(), string(privJSON), string(pubJSON), pd.deviceName, s.currentIdentityJSON()); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "保存设备凭证失败: "+err.Error())
 		return
 	}

@@ -4,8 +4,8 @@
 //  1. POST {base}/{siteKey}/challenge       → {token, format:2, challenges:[...]}
 //     - rsw 挑战：y = x^(2^t) mod N（大整数模幂）
 //     - instrumentation 挑战：base64+deflate-raw 压缩的一段 JS，内含每次随机生成的
-//       确定性算术程序（4 个随机变量、随机初始值/掩码/运算序列，算子集固定）。
-//       用 goja 以最小 DOM stub 执行该算术段即可得到正确 state，无需真实浏览器。
+//     确定性算术程序（4 个随机变量、随机初始值/掩码/运算序列，算子集固定）。
+//     用 goja 以最小 DOM stub 执行该算术段即可得到正确 state，无需真实浏览器。
 //  2. POST {base}/{siteKey}/redeem          body {token, solutions} →
 //     {success:true, token:"<id>:<secret>"}（即 cap-token，~10 分钟有效、一次性）
 //
@@ -71,9 +71,9 @@ func (s *Solver) Solve(ctx context.Context) (string, error) {
 // ---- 挑战 ----
 
 type challengeResp struct {
-	Token      string              `json:"token"`
-	Format     int                 `json:"format"`
-	Challenges []challengeEntry    `json:"challenges"`
+	Token      string           `json:"token"`
+	Format     int              `json:"format"`
+	Challenges []challengeEntry `json:"challenges"`
 }
 
 type challengeEntry struct {

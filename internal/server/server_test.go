@@ -20,10 +20,10 @@ import (
 
 // newTestServer 起 mock 上游 + 完整 Server。
 type fixture struct {
-	srv       *Server
-	ts        *httptest.Server
-	upstream  *httptest.Server
-	captured  http.Header
+	srv             *Server
+	ts              *httptest.Server
+	upstream        *httptest.Server
+	captured        http.Header
 	upstreamKeySeen *string
 }
 
@@ -37,7 +37,7 @@ func setupTest(t *testing.T, upstreamHandler http.HandlerFunc) *fixture {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	fp, err := fingerprint.NewManager(filepath.Join(dir, "fp.json"), "linux-x64")
+	fp, err := fingerprint.NewManager(filepath.Join(dir, "fp.json"), "linux-x64", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,7 @@ func setupTest(t *testing.T, upstreamHandler http.HandlerFunc) *fixture {
 		AdminPassword:   "test-admin-pw",
 		UpstreamBaseURL: upTS.URL,
 		U1S1Version:     "1.2.3",
+		BarkKey:         "test-bark-key", // 让告警路径可测（barkPushFn 在测试里被替换）
 	}
 
 	pool, err := upstream.NewPool(st)
@@ -137,7 +138,7 @@ func TestChatCompletionsForwardsFingerprintAndStreams(t *testing.T) {
 	}
 	checks := map[string]string{
 		"X-U1s1-Version":              "1.2.3",
-		"X-U1s1-Client":               "desktop", // 对齐桌面客户端（CLI 才是 terminal）
+		"X-U1s1-Client":               "terminal", // 对齐官方 CLI（桌面端才是 desktop）
 		"X-U1s1-Platform":             "linux-x64",
 		"User-Agent":                  "pi (linux 6.8.0-45-generic; x64)",
 		"X-Stainless-Lang":            "js",
@@ -223,9 +224,9 @@ func TestModelsEndpoint(t *testing.T) {
 			t.Errorf("辅助端点应带 x-u1s1-version")
 		}
 		// 辅助端点是裸 fetch：只带 authorization + x-u1s1-version + 运行时 UA。
-		// 桌面客户端（undici.install 后）发 undici；绝不能漏 Go-http-client/1.1。
-		if got := r.Header.Get("User-Agent"); got != "undici" {
-			t.Errorf("辅助端点 UA = %q, 期望 undici", got)
+		// CLI 不装 undici dispatcher，裸 fetch 发 node；绝不能漏 Go-http-client/1.1。
+		if got := r.Header.Get("User-Agent"); got != "node" {
+			t.Errorf("辅助端点 UA = %q, 期望 node", got)
 		}
 		if got := r.Header.Get("X-Stainless-Lang"); got != "" {
 			t.Errorf("辅助端点不应带 X-Stainless-*, 实际 %q", got)
@@ -300,9 +301,9 @@ func TestAdminLoginAndImportFlow(t *testing.T) {
 	}
 	var ir struct {
 		Data struct {
-			Added   int      `json:"added"`
-			Skipped int      `json:"skipped"`
-			Invalid int      `json:"invalid"`
+			Added   int `json:"added"`
+			Skipped int `json:"skipped"`
+			Invalid int `json:"invalid"`
 		} `json:"data"`
 	}
 	_ = json.NewDecoder(iresp.Body).Decode(&ir)
@@ -347,7 +348,6 @@ func cookieOf(resp *http.Response) string {
 }
 
 func timeNow() time.Time { return time.Now() }
-
 
 // TestLocalKeyCopyAnytime 校验本地 key 完整值可取回（供列表随时复制）。
 func TestLocalKeyCopyAnytime(t *testing.T) {

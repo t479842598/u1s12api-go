@@ -4,9 +4,23 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/t479842598/u1s12api-go/internal/config"
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 )
+
+// lookupNodeForTest 本机 node --version（活体测试里给身份用）。
+func lookupNodeForTest() string {
+	out, err := exec.Command("node", "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // 真实网关集成检查（**默认跳过**，不参与常规测试）。
 //
@@ -19,8 +33,11 @@ import (
 //	    "select device_token,device_private_jwk,device_public_jwk from accounts where device_id='655';"
 //	本地执行：
 //	  U1S1_DEV_TOKEN=... U1S1_DEV_PRIV='{"kty":...}' U1S1_DEV_PUB='{"kty":...}' \
-//	  U1S1_PROXY=http://127.0.0.1:7897 U1S1_EXPECT_VERSION=1.3.1 \
+//	  U1S1_PROXY=http://127.0.0.1:7897 U1S1_REAL_CHAT=1 \
 //	  go test ./internal/upstream/ -run TestRealGateway -v
+//
+// 可选：U1S1_EXPECT_VERSION 覆盖版本（默认取 config.DefaultU1S1Version）；
+// U1S1_FAKE_PROFILE=macos-arm64 改用伪装档案（默认用本机真实环境，与线上一致）。
 func TestRealGatewayAttestation(t *testing.T) {
 	tok := os.Getenv("U1S1_DEV_TOKEN")
 	priv := os.Getenv("U1S1_DEV_PRIV")
@@ -36,14 +53,23 @@ func TestRealGatewayAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("公钥 JWK 解析失败: %v", err)
 	}
-	cred := &DeviceCredential{DeviceToken: tok, PrivateJWK: pj, PublicJWK: uj}
+	// 身份必须给全：chat 的 UA / x-u1s1-platform / X-Stainless-* 全部由它派生，
+	// 留零值会发出 "pi ( ; )" 这种空指纹，让活体测试假失败。
+	// 默认用部署机真实环境（与线上一致）；U1S1_FAKE_PROFILE=macos-arm64 可改走伪装档案。
+	ident := fingerprint.DetectProfile(fingerprint.ResolveNodeVersion(os.Getenv("U1S1_NODE_VERSION"), lookupNodeForTest, tok[:12]))
+	if fp := os.Getenv("U1S1_FAKE_PROFILE"); fp != "" {
+		if p2, ok := fingerprint.ProfileByID(fp); ok {
+			ident = p2
+		}
+	}
+	cred := &DeviceCredential{DeviceToken: tok, PrivateJWK: pj, PublicJWK: uj, Profile: ident}
 
 	version := os.Getenv("U1S1_EXPECT_VERSION")
 	if version == "" {
-		version = "1.3.1"
+		version = config.DefaultU1S1Version
 	}
 	dc := NewDeviceClient("https://api.u1s1.io/v1", os.Getenv("U1S1_PROXY"),
-		func() string { return version }, nil)
+		func() string { return version }, func() fingerprint.Profile { return ident })
 	m := NewAttestationManager(func() *DeviceClient { return dc })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

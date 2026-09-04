@@ -77,7 +77,7 @@ func TestKeyClientOnlyRejected(t *testing.T) {
 
 func TestCredentialScopedError(t *testing.T) {
 	// 凭证级：换下一把凭证可能解决 → 应在多凭证间轮换
-	for _, sc := range []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusTooManyRequests} {
+	for _, sc := range []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests} {
 		if !CredentialScopedError(sc, `{}`) {
 			t.Errorf("状态码 %d 应判为凭证级（可轮换）", sc)
 		}
@@ -87,5 +87,28 @@ func TestCredentialScopedError(t *testing.T) {
 		if CredentialScopedError(sc, `{}`) {
 			t.Errorf("状态码 %d 不应判为凭证级（应立即透传）", sc)
 		}
+	}
+}
+
+// TestForbiddenNotRotatable 403 不得归为“可轮换”。
+//
+// 官方 u1s1-cli 1.7.1 给 403 新增 AccessDeniedError：封禁/停用/设备不受信任，
+// **重新登录也没用**，CLI 命中后直接 process.exit(1)。把它当成换一把凭证就能解决的错误，
+// 等于对一台已被判不受信任的设备反复敲门 —— 这本身就是很容易被风控看出来的行为。
+func TestForbiddenNotRotatable(t *testing.T) {
+	if CredentialScopedError(http.StatusForbidden, `{}`) {
+		t.Error("403 不应判为可轮换（官方语义：重登也没用）")
+	}
+	if !DeviceNotTrusted(http.StatusForbidden, `{"error":{"message":"device not trusted"}}`) {
+		t.Error("403 应被识别为设备不受信任")
+	}
+	if DeviceNotTrusted(http.StatusUnauthorized, `{}`) {
+		t.Error("401 不是不受信任，是可恢复的凭证失效")
+	}
+	if !DeviceCredentialRetired(http.StatusUnauthorized) {
+		t.Error("401 应判为凭证已吐销（需重新授权）")
+	}
+	if DeviceCredentialRetired(http.StatusForbidden) {
+		t.Error("403 不应走“重新授权可恢复”分支")
 	}
 }

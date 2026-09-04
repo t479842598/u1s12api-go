@@ -216,6 +216,23 @@ export interface ProfileSummary {
   label: string
   user_agent: string
   runtime: string
+  device_name: string
+}
+
+// 当前生效身份的完整构成。五项必须同源（ADR 0002：身份由部署机真实环境派生），
+// 后台展示它是为了让人一眼核对"我们到底像谁"。
+export interface IdentitySummary {
+  auto: boolean
+  id: string
+  hostname: string
+  platform: string
+  kernel: string
+  stainless_os: string
+  stainless_arch: string
+  node_version: string
+  user_agent: string
+  device_name: string
+  x_u1s1_client: string
 }
 
 export interface SettingsData {
@@ -231,6 +248,7 @@ export interface SettingsData {
   log_level: string
   profiles: ProfileSummary[]
   current_profile: string
+  identity?: IdentitySummary
 }
 
 // ---- 官网动态（公告 / 更新记录） ----
@@ -337,6 +355,8 @@ export interface AccountItem {
   api_key_masked: string
   device_id: string
   device_name: string
+  // 设备被网关拒绝的原因（401 需重新授权 / 403 不受信任已停用），空=正常
+  device_status_reason?: string
   last_checkin_at: number
   login_checkin_remaining: number
   last_web_checkin_at: number

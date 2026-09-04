@@ -5,13 +5,20 @@
 // u1s1d- 设备凭证，之后每个请求用 RFC 9449 DPoP（ES256）签名 + 完整客户端指纹头，
 // 网关才识别为官方客户端。本文件实现同样的认证，供 u1s12api-go 消耗这批加量包。
 //
-// 指纹与请求头对齐的是**桌面客户端**（app 0.1.9，内嵌 u1s1-cli 1.3.0 + Node 22.23.1），
-// 逐项取值与差异说明见 internal/fingerprint 包注释。
+// 指纹与请求头对齐的是**官方 CLI（terminal surface，当前 1.7.1）**，不是桌面客户端：
+// 桌面端截至 0.1.15 仍内嵌 CLI 1.3.0，报 desktop + 新版本是现实中不存在的组合（ADR 0001）。
+// 逐项取值见 internal/fingerprint 包注释，**线格式**（小写头名、HTTP/1.1、响应解压）
+// 见 internal/upstream/wire.go。两个官方入口用的是同一份 device-auth.js，头集合完全一致，
+// 真实差异只有 x-u1s1-client（terminal|desktop）与裸 fetch 的 UA（node|undici）两处。
 //
 // 设备登录流程（与官方 login.js 对齐）：
-//   POST {origin}/auth/device/start  提交公钥 → {verify_url, poll_secret, interval, expires_in}
-//   浏览器打开 verify_url 登录并批准设备
-//   POST {origin}/auth/device/poll  轮询 → {status ok, api_key, device_token, device_id}
+//
+//	device_name 用官方格式 `<hostname> (<platform>)`（login.js），由部署机真实环境派生，
+//	绝不带本项目标识或邮箱 —— 该值会永久落在网关设备记录并显示在用户官网设备页上。
+//
+//	POST {origin}/auth/device/start  提交公钥 → {verify_url, poll_secret, interval, expires_in}
+//	浏览器打开 verify_url 登录并批准设备
+//	POST {origin}/auth/device/poll  轮询 → {status ok, api_key, device_token, device_id}
 package upstream
 
 import (
@@ -21,6 +28,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -103,10 +111,10 @@ type DeviceClient struct {
 // NewDeviceClient 构造。baseURL 形如 https://api.u1s1.io/v1。
 func NewDeviceClient(baseURL, proxy string, clientVersion func() string, profile func() fingerprint.Profile) *DeviceClient {
 	return &DeviceClient{
-		baseURL:         strings.TrimRight(baseURL, "/"),
-		proxy:           proxy,
-		clientVersion:   clientVersion,
-		profile:         profile,
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		proxy:         proxy,
+		clientVersion: clientVersion,
+		profile:       profile,
 	}
 }
 
@@ -123,7 +131,7 @@ func apiOrigin(baseURL string) string {
 	return strings.TrimRight(strings.TrimSuffix(baseURL, "/v1"), "/")
 }
 
-func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+func b64url(b []byte) string      { return base64.RawURLEncoding.EncodeToString(b) }
 func b64urlBig(v *big.Int) string { return b64url(v.Bytes()) }
 
 // byteReader 返回一个 reader（body 为 nil 时返回空 reader）。
@@ -263,10 +271,37 @@ func parseJWK(s string) (*DeviceJWK, error) {
 
 // DeviceStartResp /auth/device/start 响应。
 type DeviceStartResp struct {
-	VerifyURL   string `json:"verify_url"`
-	PollSecret  string `json:"poll_secret"`
-	Interval    int    `json:"interval"`
-	ExpiresIn   int    `json:"expires_in"`
+	VerifyURL  string `json:"verify_url"`
+	PollSecret string `json:"poll_secret"`
+	Interval   int    `json:"interval"`
+	ExpiresIn  int    `json:"expires_in"`
+}
+
+// 官方 login.js 用 boundedInteger / boundedCredential 把服务端响应夹到安全区间。
+// 不夹的直接后果：expires_in 返个 86400 我们就会轮询一天；poll_secret 里带控制
+// 字符会被原样写进日志与后续请求。这里逐条照搬官方边界。
+const maxCredentialLen = 4096
+
+// boundedInt 等价于官方 boundedInteger(value, fallback, min, max)。
+func boundedInt(v, fallback, min, max int) int {
+	if v >= min && v <= max {
+		return v
+	}
+	return fallback
+}
+
+// boundedCredential 等价于官方 boundedCredential(value, prefix)：前缀 + 长度上限 + 无控制字符。
+// 不合法时返回空串，由调用方判失败。
+func boundedCredential(v, prefix string) string {
+	if !strings.HasPrefix(v, prefix) || len(v) > maxCredentialLen {
+		return ""
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return v
 }
 
 // StartDeviceLogin 发起设备登录：提交公钥，返回 verify_url + poll_secret。
@@ -286,6 +321,20 @@ func (c *DeviceClient) StartDeviceLogin(ctx context.Context, pubJWK *DeviceJWK, 
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
+	// 边界校验（对齐官方 startDeviceLogin）：verify_url 必须是 http/https 且不含账号密码，
+	// poll_secret 非空且无控制字符，interval / expires_in 夹到官方区间。
+	if out.VerifyURL == "" || out.PollSecret == "" {
+		return nil, fmt.Errorf("/auth/device/start 响应缺少 verify_url 或 poll_secret")
+	}
+	if boundedCredential(out.PollSecret, "") == "" {
+		return nil, fmt.Errorf("/auth/device/start 的 poll_secret 含非法字符或过长")
+	}
+	parsed, perr := url.Parse(out.VerifyURL)
+	if perr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return nil, fmt.Errorf("/auth/device/start 返回了不合法的 verify_url")
+	}
+	out.Interval = boundedInt(out.Interval, 2, 1, 30)
+	out.ExpiresIn = boundedInt(out.ExpiresIn, 900, 1, 1800)
 	return &out, nil
 }
 
@@ -324,9 +373,9 @@ func GenerateDeviceKeyPair() (*DeviceJWK, *DeviceJWK, error) {
 
 // DevicePollResp /auth/device/poll 响应。
 type DevicePollResp struct {
-	Status      string `json:"status"`
-	APIKey      string `json:"api_key"`
-	DeviceToken string `json:"device_token"`
+	Status      string      `json:"status"`
+	APIKey      string      `json:"api_key"`
+	DeviceToken string      `json:"device_token"`
 	DeviceID    json.Number `json:"device_id"`
 }
 
@@ -342,13 +391,18 @@ func (c *DeviceClient) PollDeviceLoginOnce(ctx context.Context, pollSecret strin
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, nil
 	}
-	if resp.Status == "ok" && resp.APIKey != "" && resp.DeviceToken != "" {
-		return &resp, nil
-	}
-	if resp.Status == "expired" {
+	if resp.Status != "ok" {
 		return nil, nil
 	}
-	return nil, nil
+	// 与官方一致：只接受形状合法的凭证（前缀 + 长度 + 无控制字符），device_id 必须是正整数。
+	// 拿不到合法凭证就当未批准，绝不把服务端返的任意字符串当凭证入库。
+	if boundedCredential(resp.APIKey, "u1s1-") == "" || boundedCredential(resp.DeviceToken, "u1s1d-") == "" {
+		return nil, nil
+	}
+	if n, err := resp.DeviceID.Int64(); err != nil || n <= 0 {
+		resp.DeviceID = ""
+	}
+	return &resp, nil
 }
 
 // PollDeviceLogin 轮询设备批准结果（interval 间隔，至 expiresIn 秒）。
@@ -392,15 +446,24 @@ func (c *DeviceClient) postJSON(ctx context.Context, u string, body any) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("content-type", "application/json")
-	// 官方设备登录用裸 fetch，不覆盖 UA：桌面端（undici.install 后）发 undici，CLI 发 node。
-	// 本项目对齐桌面客户端；必须显式设置，否则 Go 会发 Go-http-client/1.1。
-	req.Header.Set("User-Agent", fingerprint.UndiciUserAgent)
+	// 官方设备登录用裸 fetch：只有 content-type + 运行时默认 UA（CLI 启动阶段 = node）。
+	// 注意**不带** x-u1s1-version（login.js 的 fetch 没设该头）。
+	ApplyWireHeaders(req, map[string]string{
+		"content-type":    "application/json",
+		"accept":          "*/*",
+		"accept-language": "*",
+		"sec-fetch-mode":  "cors",
+		"accept-encoding": fingerprint.AcceptEncoding,
+		"user-agent":      fingerprint.NodeUserAgent,
+	})
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, fmt.Errorf("解析 device auth 响应失败: %w", err)
+	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("device auth %d: %s", resp.StatusCode, string(data))
@@ -414,15 +477,24 @@ func (c *DeviceClient) postJSON(ctx context.Context, u string, body any) ([]byte
 const defaultHeaderTimeout = 30 * time.Second
 
 // httpClient 构造设备通道 HTTP 客户端。
-// ResponseHeaderTimeout 只约束「收到响应头」的等待：黑洞时快速失败，
-// 长流式（body 慢）不受影响。
+//
+// 两个与官方对齐的关键点：
+//   - ForceAttemptHTTP2:false + NextProtos:["http/1.1"] —— 官方 pi-coding-agent 的
+//     http-dispatcher.js:74 写死 allowH2:false，实测两个官方入口对这个网关都说 HTTP/1.1；
+//     只改 ForceAttemptHTTP2 不够，必须同时把 ALPN 里的 h2 去掉。
+//   - DisableCompression:true —— 我们自己发 accept-encoding 并用 decodeResponseBody 解压，
+//     不能让 Transport 插手（否则会出现两行 accept-encoding 且我们拿不到解压后的流）。
+//
+// ResponseHeaderTimeout 只约束「收到响应头」的等待：黑洞时快速失败，长流式（body 慢）不受影响。
 func (c *DeviceClient) httpClient() *http.Client {
 	ht := c.headerTimeout
 	if ht <= 0 {
 		ht = defaultHeaderTimeout
 	}
 	tr := &http.Transport{
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false,
+		DisableCompression:    true,
+		TLSClientConfig:       &tls.Config{NextProtos: []string{"http/1.1"}},
 		MaxIdleConns:          16,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
@@ -438,13 +510,28 @@ func (c *DeviceClient) httpClient() *http.Client {
 
 // ---- 设备凭证调用网关（模拟官方客户端） ----
 
+// auxRequestHeaders 辅助端点（/me、/models）的头：官方裸 fetch 集合 + 本请求的 DPoP 签名。
+//
+// ua：CLI 启动阶段取 node，已装 dispatcher 后（会话中途刷新）取 undici。
+func (c *DeviceClient) auxRequestHeaders(cred *DeviceCredential, method, rawURL, ua string) (map[string]string, error) {
+	h := fingerprint.AuxHeaders("", c.clientVersion(), ua)
+	dp, err := dpopHeaders(cred.DeviceToken, cred.PublicJWK, cred.PrivateJWK, method, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range dp {
+		h[k] = v
+	}
+	return h, nil
+}
+
 // DeviceMeResult /v1/me 中与签到/加量包相关字段（裁剪出需要的）。
 type DeviceMeResult struct {
 	Email string `json:"email"`
 	// login_checkin 加量包剩余 token（nil=无）。
-	LoginCheckinRemaining *int64  `json:"login_checkin_remaining"`
+	LoginCheckinRemaining *int64      `json:"login_checkin_remaining"`
 	Packages              []MePackage `json:"packages"`
-	FreeClaim             string  `json:"free_claim"`
+	FreeClaim             string      `json:"free_claim"`
 }
 
 // MePackage /v1/me packages 里的单个加量包。
@@ -463,29 +550,28 @@ type MePackage struct {
 }
 
 // DeviceMe 用设备凭证调 GET /v1/me（触发每日加量包发放），返回裁剪结果。
-func (c *DeviceClient) DeviceMe(ctx context.Context, account *DeviceCredential) (*DeviceMeResult, error) {
+func (c *DeviceClient) DeviceMe(ctx context.Context, account *DeviceCredential, ua string) (*DeviceMeResult, error) {
 	u := c.baseURL + "/me"
-	headers, err := dpopHeaders(account.DeviceToken, account.PublicJWK, account.PrivateJWK, http.MethodGet, u)
+	headers, err := c.auxRequestHeaders(account, http.MethodGet, u, ua)
 	if err != nil {
 		return nil, err
 	}
-	// 官方 fetchMe 带 x-u1s1-version（authorizedFetch 的 init.headers 里显式设置），
-	// UA 是裸 fetch 的运行时默认值（桌面端 undici.install 后→ undici）。
-	headers["x-u1s1-version"] = c.clientVersion()
-	headers["user-agent"] = fingerprint.UndiciUserAgent
 	resp, err := c.doDevice(ctx, http.MethodGet, "/me", headers, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, err
+	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	var raw struct {
-		Email    string      `json:"email"`
-		Packages []MePackage `json:"packages"`
-		FreeClaim string     `json:"free_claim"`
+		Email     string      `json:"email"`
+		Packages  []MePackage `json:"packages"`
+		FreeClaim string      `json:"free_claim"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("解析 /v1/me 响应失败: %w", err)
@@ -518,22 +604,23 @@ const maxAttestationTokenLen = 1024
 // DeviceModels 用设备凭证调 GET /v1/models，取回网关签发的客户端证明令牌。
 //
 // 与官方 fetchModels 一致：只带 authorization(DPoP) + x-u1s1-version + 裸 fetch 的运行时
-// UA（桌面端 undici.install 后→ undici），不带 X-Stainless-*（那些头只属于 SDK 发的 chat 请求）。
-// 令牌是**按设备签发**的（payload 含 u=user id、d=device_id），无法伪造或跨账号复用，
+// UA（CLI 启动阶段 node，进程装了 dispatcher 后 undici —— 由 ua 参数决定），不带 X-Stainless-*。
+// 令牌是**按设备签发**的（payload 含 u=user id、d=device_id），无法伪造或跳账号复用，
 // 且每次调用都会重新签发（nonce/exp 变化），因此必须按账号分别获取并缓存。
-func (c *DeviceClient) DeviceModels(ctx context.Context, account *DeviceCredential) (*DeviceModelsResult, error) {
+func (c *DeviceClient) DeviceModels(ctx context.Context, account *DeviceCredential, ua string) (*DeviceModelsResult, error) {
 	u := c.baseURL + "/models"
-	headers, err := dpopHeaders(account.DeviceToken, account.PublicJWK, account.PrivateJWK, http.MethodGet, u)
+	headers, err := c.auxRequestHeaders(account, http.MethodGet, u, ua)
 	if err != nil {
 		return nil, err
 	}
-	headers["x-u1s1-version"] = c.clientVersion()
-	headers["user-agent"] = fingerprint.UndiciUserAgent
 	resp, err := c.doDevice(ctx, http.MethodGet, "/models", headers, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := decodeResponseBody(resp); err != nil {
+		return nil, err
+	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
@@ -609,34 +696,22 @@ func (c *DeviceClient) DeviceChat(ctx context.Context, account *DeviceCredential
 	if err != nil {
 		return nil, err
 	}
-	headers := map[string]string{}
+	// 身份快照优先用该账号授权当时写入的 Profile；为空（历史数据或回填失败）时
+	// 退到当前全局身份，保证不会因缺数据而发不出请求。
+	p := account.Profile
+	if p.UAPlatform == "" || p.UAArch == "" {
+		p = c.currentProfile()
+	}
+	headers := fingerprint.ChatFingerprintHeaders(p, c.clientVersion(), attestation)
 	for k, v := range dp {
 		headers[k] = v
 	}
-	// 追加客户端指纹头（与官方签名代理一致：代理把本地 SDK 请求头原样转发，
-	// 再补 x-u1s1-client / x-u1s1-version / x-u1s1-platform / x-u1s1-attestation）。
-	// X-Stainless-* 开套必须保留：它们由 openai SDK v6.40.0 的 getPlatformHeaders() 自动附加，
-	// 而两个官方入口（CLI TUI 与桌面端 agent server）都用 pi-ai 的 openai-completions 发 chat，
-	// 签名代理的 requestHeaders() 只剔除 host/connection/content-length/authorization/dpop。
-	// 2026-09-03 用官方 ensureSigningProxy + 官方 pi-ai 客户端实跑抓包确认桌面端发这 7 个头。
-	p := c.currentProfile()
-	headers["user-agent"] = fingerprint.UserAgent(p)
-	headers["x-u1s1-version"] = c.clientVersion()
-	headers["x-u1s1-client"] = fingerprint.ClientSurface
-	headers["x-u1s1-platform"] = fingerprint.ClientPlatform(p)
-	headers["X-Stainless-Lang"] = "js"
-	headers["X-Stainless-Package-Version"] = fingerprint.SDKPackageVersion
-	headers["X-Stainless-OS"] = p.StainlessOS
-	headers["X-Stainless-Arch"] = p.StainlessArch
-	headers["X-Stainless-Runtime"] = "node"
-	headers["X-Stainless-Runtime-Version"] = p.RuntimeVersion
-	headers["X-Stainless-Retry-Count"] = "0"
-	// v1.3.0 新增：网关签发的客户端证明。官方签名代理仅在拿到令牌时注入，缺失即不发。
-	if attestation != "" {
-		headers["x-u1s1-attestation"] = attestation
-	}
 	resp, err := c.doDevice(ctx, http.MethodPost, "/chat/completions", headers, body)
 	if err != nil {
+		return nil, err
+	}
+	if err := decodeResponseBody(resp); err != nil {
+		defer resp.Body.Close()
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
@@ -653,24 +728,30 @@ func (c *DeviceClient) doDevice(ctx context.Context, method, path string, header
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
+	ApplyWireHeaders(req, headers)
 	if body != nil && req.Header.Get("content-type") == "" {
-		req.Header.Set("content-type", "application/json")
+		SetWireHeader(req.Header, "content-type", "application/json")
 	}
 	return c.httpClient().Do(req)
 }
 
 // DeviceCredential 设备凭证聚合（供上层使用）。
+//
+// Profile 是**该账号授权当时**的客户端身份快照（ADR 0002 / 设计 D-06）：
+// 真实世界里一台设备就是一个操作系统一个内核，若用全局可热切换的身份发请求，
+// 后台一切换就等于所有已授权设备同时换了系统 —— 这是真实设备群里不存在的形态。
 type DeviceCredential struct {
 	DeviceToken string
 	PublicJWK   *DeviceJWK
 	PrivateJWK  *DeviceJWK
+	Profile     fingerprint.Profile
 }
 
-// AccountToCredential 从 store.Account 构造 DeviceCredential。
-func AccountToCredential(deviceToken, privJWKJSON, pubJWKJSON string) (*DeviceCredential, error) {
+// AccountToCredential 从账号行构造设备凭证。
+//
+// identityJSON 为该账号入库的身份快照；为空或解析失败时用 fallback（当前全局身份），
+// 绝不因为身份数据坏了就不发请求。
+func AccountToCredential(deviceToken, privJWKJSON, pubJWKJSON, identityJSON string, fallback fingerprint.Profile) (*DeviceCredential, error) {
 	priv, err := parseJWK(privJWKJSON)
 	if err != nil {
 		return nil, err
@@ -679,5 +760,12 @@ func AccountToCredential(deviceToken, privJWKJSON, pubJWKJSON string) (*DeviceCr
 	if err != nil {
 		return nil, err
 	}
-	return &DeviceCredential{DeviceToken: deviceToken, PrivateJWK: priv, PublicJWK: pub}, nil
+	cred := &DeviceCredential{DeviceToken: deviceToken, PrivateJWK: priv, PublicJWK: pub, Profile: fallback}
+	if identityJSON != "" {
+		var p fingerprint.Profile
+		if err := json.Unmarshal([]byte(identityJSON), &p); err == nil && p.UAPlatform != "" && p.UAArch != "" {
+			cred.Profile = p
+		}
+	}
+	return cred, nil
 }

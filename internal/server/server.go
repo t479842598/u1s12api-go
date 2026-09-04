@@ -82,14 +82,14 @@ const adminCookieName = "u1s12api_admin"
 // New 组装 Server。
 func New(cfg *config.Settings, st *store.Store, pool *upstream.Pool, fp *fingerprint.Manager, projectRoot string, staticFS fs.FS) (*Server, error) {
 	s := &Server{
-		store:       st,
-		pool:        pool,
-		fp:          fp,
-		staticFS:    staticFS,
-		projectRoot: projectRoot,
-		throttle:    newLoginThrottle(5, 15*time.Minute),
-		pending:     &pendingDeviceMap{},
-		oneClick:    &oneClickMap{},
+		store:                st,
+		pool:                 pool,
+		fp:                   fp,
+		staticFS:             staticFS,
+		projectRoot:          projectRoot,
+		throttle:             newLoginThrottle(5, 15*time.Minute),
+		pending:              &pendingDeviceMap{},
+		oneClick:             &oneClickMap{},
 		deviceQuotaExhausted: map[int64]time.Time{},
 	}
 	s.cfg.Store(cfg)

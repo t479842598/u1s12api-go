@@ -14,8 +14,10 @@
  *
  * 取包：
  *   CLI    ：curl -O https://registry.npmjs.org/u1s1-cli/-/u1s1-cli-<版本>.tgz && tar xzf ...
- *   桌面端：https://u1s1.io/releases/app/latest/dmg（= /releases/app/LATEST 的 0.1.9）
- *          hdiutil attach u1s1_0.1.9_aarch64.dmg -nobrowse -mountpoint /tmp/u1s1-mnt
+ *   桌面端：https://u1s1.io/releases/app/LATEST 查版本，latest.json 有 darwin-aarch64
+ *          与 windows-x86_64 两个目标；已安装时直接看 /Applications/u1s1.app：
+ *            /Applications/u1s1.app/Contents/Resources/resources/server
+ *            /Applications/u1s1.app/Contents/Resources/resources/Pi Agent Server.app/Contents/MacOS/node
  *          桌面端把 u1s1-cli 当库用：
  *            <mnt>/u1s1.app/Contents/Resources/resources/server/node_modules/u1s1-cli
  *          自带 Node：<mnt>/u1s1.app/Contents/Resources/resources/Pi Agent Server.app/Contents/MacOS/node
@@ -66,11 +68,20 @@
  *   2026-09-04  0.1.11              1.5.0        **零变化**：dpopHeaders/出站头集合与 1.4.1 逐字相同，
  *                                                diff 只有响应转发修复（剔 content-encoding）与公告轮询端点；
  *                                                仅 x-u1s1-version 值 1.4.1→1.5.0 → v0.9.8 同步版本号
+ *   2026-09-04  0.1.15              1.7.1        **请求链路零变化**：device-auth.js 与 config.js 逐字节相同，
+ *                                                login.js 只多一行 console.log；api.js 新增 AccessDeniedError
+ *                                                （403=封禁/停用/设备不受信任，CLI 命中即 process.exit(1)）。
+ *                                                桌面端内嵌仍是 CLI 1.3.0 + Node 22.23.1 + openai 6.40.0 + undici 8.5.0。
+ *                                                → spec 04：对齐目标改为 CLI(terminal)、版本升 1.7.1，
+ *                                                  并修 HTTP/1.1、小写头名、补齐 accept/accept-language/
+ *                                                  sec-fetch-mode、accept-encoding、device_name 格式、
+ *                                                  attestation 30s 失败退避、401/403 分流
  *
  *   下次真正需要同步的触发条件（任一成立才改代码）：
- *   1. 桌面端内嵌的 u1s1-cli 不再是 1.3.0（看 node_modules/u1s1-cli/package.json）
- *   2. npm u1s1-cli 超过 1.5.0（那是我们 x-u1s1-version 的取值）
- *   3. 本脚本输出出现新增/缺失的头，或 DPoP 结构变化
+ *   1. npm u1s1-cli 超过 1.7.1（那是我们 x-u1s1-version 的取值）→ 跟版并复跑本脚本
+ *   2. 本脚本输出出现新增/缺失的头，或 DPoP 结构变化
+ *   3. 官方 CLI 的 package.json engines.node 下限变了（约束我们可声称的 runtime 版本）
+ *   4. 桌面端内嵌 CLI 版本变了（仅作对照：我们已不对齐 desktop，见 ADR 0001）
  */
 
 import { createServer } from 'node:http';
@@ -83,7 +94,7 @@ if (!ROOT) {
   process.exit(2);
 }
 const SURFACE = process.env.SURFACE || 'desktop';
-const VERSION = process.env.CLI_VERSION || '1.3.0';
+const VERSION = process.env.CLI_VERSION || '1.7.1';
 const U = (p) => pathToFileURL(`${ROOT}/node_modules/${p}`).href;
 
 const { ensureSigningProxy } = await import(U('u1s1-cli/dist/device-auth.js'));
@@ -122,7 +133,22 @@ const cfg = {
   devicePublicJwk: publicJwk,
   devicePrivateJwk: privateJwk,
 };
-const signing = await ensureSigningProxy(cfg, SURFACE, 'ATT_TOKEN');
+// ensureSigningProxy 的第三参在 1.5.0 换了形状：
+//   1.3.0/1.4.x → 字符串（代理直接 set 该值）
+//   1.5.0+      → 对象 { token, expiresInSeconds, refresh }（代理内部 single-flight 刷新）
+// 传错形状时 1.5.0+ 会静默不发 x-u1s1-attestation（updateAttestationHolder 读不到 source.token），
+// 2026-09-04 核对 CLI 1.7.1 时就踩过这个坑，故按版本分支。
+const attestationSource = versionAtLeast(VERSION, '1.5.0')
+  ? { token: 'ATT_TOKEN', expiresInSeconds: 604800, refresh: async () => ({ token: 'ATT_TOKEN', expiresInSeconds: 604800 }) }
+  : 'ATT_TOKEN';
+const signing = await ensureSigningProxy(cfg, SURFACE, attestationSource);
+
+function versionAtLeast(v, min) {
+  const p = (x) => String(x).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = p(v), b = p(min);
+  for (let i = 0; i < 3; i++) { if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0); }
+  return true;
+}
 
 // 桌面端 models.json 里 u1s1 provider 的形状（api=openai-completions + headers）。
 const provider = {

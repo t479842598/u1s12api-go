@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 )
 
 // testAttestationToken 与真实网关签发格式一致的测试令牌（150 字符）：
@@ -230,7 +232,7 @@ func TestAttestationIgnoresOversizedToken(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	dc := NewDeviceClient(srv.URL, "", func() string { return "1.3.0" }, nil)
-	res, err := dc.DeviceModels(context.Background(), deviceCredential(t))
+	res, err := dc.DeviceModels(context.Background(), deviceCredential(t), fingerprint.NodeUserAgent)
 	if err != nil {
 		t.Fatalf("DeviceModels 失败: %v", err)
 	}

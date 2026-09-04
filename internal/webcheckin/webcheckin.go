@@ -127,10 +127,10 @@ var extraClaims = []claimKind{
 
 // meInfo /api/me 中领取状态与打卡信息相关字段。
 type meInfo struct {
-	InviteClaim            string `json:"invite_claim"`
-	NewUserClaim           string `json:"new_user_claim"`
-	PaymentDelayGiftClaim  string `json:"payment_delay_gift_claim"`
-	LoginCheckin           *struct {
+	InviteClaim           string `json:"invite_claim"`
+	NewUserClaim          string `json:"new_user_claim"`
+	PaymentDelayGiftClaim string `json:"payment_delay_gift_claim"`
+	LoginCheckin          *struct {
 		Streak        int64 `json:"streak"`
 		LongestStreak int64 `json:"longest_streak"`
 	} `json:"login_checkin"`

@@ -57,7 +57,7 @@ func main() {
 	}
 	defer st.Close()
 
-	fp, err := fingerprint.NewManager(filepath.Join(root, "data", "fingerprint.json"), settings.FingerprintProfile)
+	fp, err := fingerprint.NewManager(filepath.Join(root, "data", "fingerprint.json"), settings.FingerprintProfile, settings.FingerprintNodeVersion)
 	if err != nil {
 		appLogger.Errorf("初始化头指纹失败: %v", err)
 		os.Exit(1)

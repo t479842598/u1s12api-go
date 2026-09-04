@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/t479842598/u1s12api-go/internal/fingerprint"
 	"github.com/t479842598/u1s12api-go/internal/store"
-	"github.com/t479842598/u1s12api-go/internal/upstream"
 )
 
 // checkinBuffer 签到缓冲：北京时间 0 点刚过让上游完成重置。
@@ -120,14 +120,14 @@ func tokensCN(v int64) string {
 
 // dpopCheckinOne 旧机制：用设备凭证调 /v1/me 触发加量包发放。
 func (s *Server) dpopCheckinOne(acc *store.Account) error {
-	cred, err := upstream.AccountToCredential(acc.DeviceToken, acc.DevicePrivateJWK, acc.DevicePublicJWK)
+	cred, err := s.accountCredential(acc)
 	if err != nil {
 		return err
 	}
 	dc := s.deviceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	me, err := dc.DeviceMe(ctx, cred)
+	me, err := dc.DeviceMe(ctx, cred, fingerprint.UndiciUserAgent)
 	if err != nil {
 		return err
 	}
