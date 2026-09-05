@@ -1,25 +1,31 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="porcelain-moss">
+<html lang="zh-CN" data-theme="u1s1-official">
   <head>
     <meta charset="UTF-8" />
     <script>
       (() => {
-        const storageKey = "u1s12api.admin.theme"
+        const THEME_KEY = "u1s12api.admin.theme.v2"
+        const MODE_KEY = "u1s12api.admin.mode"
+        const LEGACY_KEY = "u1s12api.admin.theme"
+        const THEMES = [
+          "u1s1-official", "porcelain-moss", "tungsten-dark", "neo-brutalism",
+          "apple-glass", "clear-glass", "paper-ink", "terminal",
+        ]
+        let theme = "u1s1-official"
         let mode = "system"
         try {
-          mode = localStorage.getItem(storageKey) || "system"
-        } catch {
-          mode = "system"
-        }
+          const storedTheme = localStorage.getItem(THEME_KEY) || localStorage.getItem(LEGACY_KEY)
+          if (storedTheme && THEMES.includes(storedTheme)) theme = storedTheme
+          const storedMode = localStorage.getItem(MODE_KEY)
+          if (storedMode === "light" || storedMode === "dark" || storedMode === "system") mode = storedMode
+        } catch {}
         const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
-        const theme =
-          mode === "tungsten-dark" || (mode === "system" && prefersDark)
-            ? "tungsten-dark"
-            : "porcelain-moss"
+        const dark = mode === "system" ? prefersDark : mode === "dark"
         const root = document.documentElement
         root.dataset.theme = theme
-        root.classList.toggle("dark", theme === "tungsten-dark")
-        root.style.colorScheme = theme === "tungsten-dark" ? "dark" : "light"
+        root.dataset.mode = dark ? "dark" : "light"
+        root.classList.toggle("dark", dark)
+        root.style.colorScheme = dark ? "dark" : "light"
       })()
     </script>
     <link rel="icon" href="/admin/favicon.svg" type="image/svg+xml" />

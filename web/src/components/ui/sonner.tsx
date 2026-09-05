@@ -3,11 +3,11 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
 import { useDashboardTheme } from "@/components/theme/theme-context"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme } = useDashboardTheme()
+  const { dark } = useDashboardTheme()
 
   return (
     <Sonner
-      theme={theme.appearance as ToasterProps["theme"]}
+      theme={dark ? "dark" : "light"}
       className="toaster group"
       icons={{
         success: (
