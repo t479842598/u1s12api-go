@@ -357,6 +357,8 @@ export interface AccountItem {
   device_name: string
   // 设备被网关拒绝的原因（401 需重新授权 / 403 不受信任已停用），空=正常
   device_status_reason?: string
+  // 设备信任状态：''=正常 | 'relogin'=被要求重新登录（403 完整性审查，重新授权可恢复）| 'banned'=不受信任（需人工申诉）
+  device_status?: string
   last_checkin_at: number
   login_checkin_remaining: number
   last_web_checkin_at: number

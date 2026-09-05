@@ -75,6 +75,37 @@ func TestKeyClientOnlyRejected(t *testing.T) {
 	}
 }
 
+// integrityReview403Body 生产实测（2026-09-05 13:03 北京，account=479842598@qq.com）：
+// 上游新上的「客户端完整性审查」，文案要求升级并重新登录，附 account_restricted 申诉链接。
+const integrityReview403Body = `{"error":{"message":"为了保护你的账号和用量安全，本次请求已暂停。请升级并重新登录 u1s1；如果继续使用非 u1s1 客户端，账号将被封禁。如确认是误判，请一键提交申诉 → https://u1s1.io/dashboard#support?topic=account_restricted","type":"forbidden","code":"client_integrity_review"}}`
+
+func TestIntegrityReviewRelogin(t *testing.T) {
+	if !IntegrityReviewRelogin(http.StatusForbidden, integrityReview403Body) {
+		t.Error("生产实测的 client_integrity_review 403 应被识别为需重新登录")
+	}
+	// 变体：只有中文文案、未带 code
+	if !IntegrityReviewRelogin(http.StatusForbidden, `{"error":{"message":"为了保护你的账号和用量安全，本次请求已暂停。请升级并重新登录 u1s1"}}`) {
+		t.Error("「本次请求已暂停 + 请升级并重新登录」文案应被识别")
+	}
+	// 旧版 Key 通道关闭（u1s1_client_only）文案也含「请升级并重新登录」，
+	// 但那是 Key 推理通道问题，重新授权设备无关，不得误判。
+	if IntegrityReviewRelogin(http.StatusForbidden, clientOnly403Body) {
+		t.Error("u1s1_client_only 不应被判为需重新登录（那是 Key 通道关闭）")
+	}
+	// 普通不受信任 403（重登没用）不应误判
+	if IntegrityReviewRelogin(http.StatusForbidden, `{"error":{"message":"device not trusted","code":"device_not_trusted"}}`) {
+		t.Error("普通 403 不应被判为需重新登录")
+	}
+	// 非 403 一律不算
+	if IntegrityReviewRelogin(http.StatusUnauthorized, integrityReview403Body) {
+		t.Error("非 403 不应判为需重新登录")
+	}
+	// 它同时仍是 DeviceNotTrusted（所有 403 都停轮换透传），两个分类不互斥
+	if !DeviceNotTrusted(http.StatusForbidden, integrityReview403Body) {
+		t.Error("完整性审查 403 仍应命中 DeviceNotTrusted（停止轮换）")
+	}
+}
+
 func TestCredentialScopedError(t *testing.T) {
 	// 凭证级：换下一把凭证可能解决 → 应在多凭证间轮换
 	for _, sc := range []int{http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusTooManyRequests} {

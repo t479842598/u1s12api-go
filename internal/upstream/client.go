@@ -363,6 +363,39 @@ func DeviceNotTrusted(statusCode int, body string) bool {
 	return statusCode == http.StatusForbidden
 }
 
+// IntegrityReviewRelogin 403：网关新上的「客户端完整性审查」（client_integrity_review）。
+//
+// 与 AccessDeniedError（重登也没用）不同，这类 403 的官方文案明确要求
+// 「升级并重新登录 u1s1」——重新登录（重新走设备授权）就是官方给出的恢复路径，
+// 继续使用非官方客户端才会升级为封禁。实测（2026-09-05）它是采样式拦截：
+// 同一账号同一秒，一条被 403、另一条 200，账号并未被真正封禁。
+//
+// 命中后应：停用该账号（不再拿它敲门，避免升级为封禁）+ 标记「需重新登录」，
+// 等人工在后台重新授权恢复，而不是当永久封禁处理。
+//
+// 真实样本（2026-09-05 13:03 生产，account=479842598@qq.com）：
+//
+//	{"error":{"message":"为了保护你的账号和用量安全，本次请求已暂停。请升级并重新登录 u1s1；
+//	 如果继续使用非 u1s1 客户端，账号将被封禁。如确认是误判，请一键提交申诉 →
+//	 https://u1s1.io/dashboard#support?topic=account_restricted…"}}
+func IntegrityReviewRelogin(statusCode int, body string) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	// Key 通道的 u1s1_client_only 文案也含「请升级并重新登录」，但那是旧版 API Key
+	// 推理通道被关闭，与设备凭证无关、重新授权设备也没用，必须排除（由
+	// KeyClientOnlyRejected 单独处理）。
+	if KeyClientOnlyRejected(statusCode, body) {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "client_integrity_review") ||
+		strings.Contains(lower, "account_restricted") ||
+		strings.Contains(body, "继续使用非 u1s1 客户端") ||
+		strings.Contains(body, "本次请求已暂停") ||
+		strings.Contains(body, "请升级并重新登录 u1s1")
+}
+
 // KeyClientOnlyRejected 识别网关「旧版 u1s1- API Key 推理通道已被关闭」的 403。
 //
 // 实测形态（2026-09-01 直连真网关，带完整 Key 通道指纹头仍 403）：

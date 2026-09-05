@@ -122,6 +122,57 @@ func Test403DisablesAccountAndStopsRotation(t *testing.T) {
 	}
 }
 
+// integrityReviewBody 生产实测（2026-09-05 13:03 北京）：上游「客户端完整性审查」403，
+// 文案要求「升级并重新登录 u1s1」——与 device_not_trusted（重登没用）不同，重新授权可恢复。
+const integrityReviewBody = `{"error":{"message":"为了保护你的账号和用量安全，本次请求已暂停。请升级并重新登录 u1s1；如果继续使用非 u1s1 客户端，账号将被封禁。","type":"forbidden","code":"client_integrity_review"}}`
+
+// Test403IntegrityReviewMarksRelogin 完整性审查 403：停用 + 标记 relogin（区别于 banned），
+// 不轮换、发 Bark、透传；重授权成功后状态应完全清除。
+func Test403IntegrityReviewMarksRelogin(t *testing.T) {
+	fx, getHits := trustFixture(t, "u1s1d-rev", http.StatusForbidden, integrityReviewBody)
+	rev := mkDeviceAccount(t, fx, "rev@test.dev", "u1s1d-rev", 9000) // 额度最高 → 必然首选
+	mkDeviceAccount(t, fx, "fine@test.dev", "u1s1d-fine", 100)
+	sent := captureBark(t)
+	prepareDeviceChatFX(t, fx)
+
+	resp := postDeviceChat(t, fx.ts.URL, "sk-local-test")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("客户端应拿到透传的 403，实际 %d", resp.StatusCode)
+	}
+	hits := getHits()
+	if n := hitsFor(hits, "u1s1d-rev"); n != 1 {
+		t.Errorf("被审查设备被打 %d 次，期望 1（停用避免升级为封禁）", n)
+	}
+	if n := hitsFor(hits, "u1s1d-fine"); n != 0 {
+		t.Errorf("403 后不应换下一个账号敲门，实际 fine 被打 %d 次", n)
+	}
+	ga, _ := fx.srv.store.GetAccount(rev.ID)
+	if ga.Enabled {
+		t.Error("完整性审查 403 应停用账号")
+	}
+	if ga.DeviceStatus != "relogin" {
+		t.Errorf("应标记 device_status=relogin（可重新授权恢复），实际 %q", ga.DeviceStatus)
+	}
+	if ga.DeviceStatusReason == "" {
+		t.Error("需重新登录的原因应入库供后台展示")
+	}
+	if !ga.Authorized {
+		t.Error("relogin 不应清 authorized（凭证没被吊销，只是被要求重新登录）")
+	}
+	if len(*sent) == 0 {
+		t.Error("需重新登录必须 Bark 告警（否则账号会悄悄死掉）")
+	}
+	// 重授权成功 → 完全恢复（清 relogin）
+	if err := fx.srv.store.SaveAccountDeviceCredential(rev.ID, "u1s1d-rev2", "u1s1-x", "510", "{}", "{}", "h (macos)", `{"id":"macos-x64"}`); err != nil {
+		t.Fatal(err)
+	}
+	ga, _ = fx.srv.store.GetAccount(rev.ID)
+	if !ga.Enabled || ga.DeviceStatus != "" || ga.DeviceStatusReason != "" {
+		t.Errorf("重授权后应完全恢复：%+v", ga)
+	}
+}
+
 // Test401MarksUnauthorizedAndKeepsRotating 401：标记需重新授权（不动 enabled），
 // 但换下一个账号继续是合理的（那台设备确实失效了，别的设备可能正常）。
 func Test401MarksUnauthorizedAndKeepsRotating(t *testing.T) {
@@ -220,6 +271,17 @@ func TestStoreDeviceStatusMethods(t *testing.T) {
 	got, _ := fx.srv.store.GetAccount(a.ID)
 	if got.Enabled || got.DeviceStatusReason != "403 不受信任" {
 		t.Errorf("停用未生效：%+v", got)
+	}
+	if got.DeviceStatus != "banned" {
+		t.Errorf("DisableAccountByGateway 应标 banned，实际 %q", got.DeviceStatus)
+	}
+	// relogin 与 banned 是两种可区分的状态
+	if err := fx.srv.store.MarkAccountNeedsRelogin(a.ID, "403 完整性审查"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = fx.srv.store.GetAccount(a.ID)
+	if got.Enabled || got.DeviceStatus != "relogin" {
+		t.Errorf("MarkAccountNeedsRelogin 未生效：enabled=%v status=%q", got.Enabled, got.DeviceStatus)
 	}
 	// 重授权要恢复可用并清掉原因
 	if err := fx.srv.store.SaveAccountDeviceCredential(a.ID, "u1s1d-st", "u1s1-x", "509", "{}", "{}", "h (linux)", `{"id":"auto"}`); err != nil {

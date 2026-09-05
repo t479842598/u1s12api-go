@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.10.4 (2026-09-05)
+
+### 新增
+
+- **403 区分「需重新登录」与「不受信任」两类**：上游 2026-09-05 起新增 `client_integrity_review` 型 403，文案是「本次请求已暂停，请升级并重新登录 u1s1」——重新授权就是官方给出的恢复路径，与旧的 `AccessDeniedError`（重登没用、只能申诉）语义不同。新增 `upstream.IntegrityReviewRelogin()` 分类（排除 `u1s1_client_only` 避免误判），命中后账号标记 `device_status='relogin'` 并停用（继续拿被审查设备敲门会升级为封禁），Bark 告警文案改为引导去后台重新授权
+- **账号列表新增「重新授权」按钮**：已授权账号随时可重新走设备授权流程（刷新 device_token / 身份快照 / attestation），不再只有未授权账号才能发起授权
+- **需重新登录弹窗**：后台「授权账号」页发现 `relogin` 状态账号时自动弹窗，展示网关拒绝原因，点「去重新授权」直接进入设备授权流程；每个账号每次会话只自动弹一次（列表 15s 轮询不重复打扰）
+- **DB 迁移**：`accounts` 新增 `device_status` 列（`''`|`relogin`|`banned`），幂等 `ALTER TABLE`；重授权成功（`SaveAccountDeviceCredential`）自动清空状态并恢复启用
+
+### 验证
+
+- `TestIntegrityReviewRelogin`：生产实测 body 命中；`u1s1_client_only`（文案也含「请升级并重新登录」）不误判；普通 403 / 非 403 不误判；与 `DeviceNotTrusted` 不互斥
+- `Test403IntegrityReviewMarksRelogin`：完整性审查 403 → 设备只被打 1 次、不轮换、停用且 `device_status=relogin`、`authorized` 不被误清、Bark 发出；重授权后状态完全清除
+- `TestStoreDeviceStatusMethods` 加强：`banned` 与 `relogin` 两种状态可区分
+- `go build` + `go vet` + `go test ./...` 全绿；前端 `npm run build` 成功
+
 ## v0.10.3 (2026-09-05)
 
 ### 变更

@@ -273,14 +273,25 @@ func (s *Server) tryDeviceChatCompletion(w http.ResponseWriter, r *http.Request,
 				logger.Warnf("设备通道上游错误 account=%s status=%d body=%.200s", acc.Email, apiErr.StatusCode, apiErr.Body)
 				// 403：官方 1.7.1 定性为「封禁/停用/设备不受信任」，重登也没用（CLI 直接 exit(1)）。
 				// 对应动作：停用该账号 + Bark 告警 + 透传原因 + **停止换下一个账号重试同一请求**。
+				// 例外：2026-09-05 起上游新增的「客户端完整性审查」（client_integrity_review）
+				// 文案是「请升级并重新登录 u1s1」——重新授权可恢复，所以标记 relogin 供后台引导。
 				if upstream.DeviceNotTrusted(apiErr.StatusCode, apiErr.Body) {
 					s.attest.Invalidate(cred)
-					reason := fmt.Sprintf("网关拒绝（403）：%s", truncate(apiErr.Body, 200))
-					if derr := s.store.DisableAccountByGateway(acc.ID, reason); derr != nil {
-						logger.Warnf("停用不受信任账号失败 account=%s: %v", acc.Email, derr)
+					if upstream.IntegrityReviewRelogin(apiErr.StatusCode, apiErr.Body) {
+						reason := fmt.Sprintf("网关要求重新登录（403 完整性审查）：%s", truncate(apiErr.Body, 200))
+						if derr := s.store.MarkAccountNeedsRelogin(acc.ID, reason); derr != nil {
+							logger.Warnf("标记需重新登录账号失败 account=%s: %v", acc.Email, derr)
+						}
+						logger.Warnf("设备账号被网关要求重新登录（403），已停用并标记 relogin account=%s：%s", acc.Email, truncate(apiErr.Body, 200))
+						s.alertDeviceNeedsRelogin(acc.Email, apiErr.Body)
+					} else {
+						reason := fmt.Sprintf("网关拒绝（403）：%s", truncate(apiErr.Body, 200))
+						if derr := s.store.DisableAccountByGateway(acc.ID, reason); derr != nil {
+							logger.Warnf("停用不受信任账号失败 account=%s: %v", acc.Email, derr)
+						}
+						logger.Warnf("设备账号被网关判为不受信任（403），已停用 account=%s：%s", acc.Email, truncate(apiErr.Body, 200))
+						s.alertDeviceNotTrusted(acc.Email, apiErr.Body)
 					}
-					logger.Warnf("设备账号被网关判为不受信任（403），已停用 account=%s：%s", acc.Email, truncate(apiErr.Body, 200))
-					s.alertDeviceNotTrusted(acc.Email, apiErr.Body)
 					s.recordRequest(localKeyName, req.Model, 0, req.Stream, started, apiErr.StatusCode, 0, 0, 0, "error", truncate(apiErr.Body, 1000), clientIP(r))
 					passthroughUpstreamError(w, apiErr)
 					return true, true, ""

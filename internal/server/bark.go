@@ -86,3 +86,20 @@ func (s *Server) alertDeviceNotTrusted(email, body string) {
 		logger.Warnf("403 停用告警推送失败: %v", err)
 	}
 }
+
+// alertDeviceNeedsRelogin 设备账号被网关要求重新登录（403 client_integrity_review）时告警。
+//
+// 与 alertDeviceNotTrusted 的区别：这类 403 官方文案就是「请升级并重新登录 u1s1」，
+// 重新授权可恢复，所以告警引导去后台点「重新授权」，而不是只能官网申诉。
+func (s *Server) alertDeviceNeedsRelogin(email, body string) {
+	key := strings.TrimSpace(s.getSettings().BarkKey)
+	if key == "" {
+		return
+	}
+	title := "u1s1 账号需重新登录(403)"
+	msg := fmt.Sprintf("账号 %s 被网关要求重新登录，已停用。请到后台「授权账号」点「重新授权」恢复。原因：%s",
+		store.MaskEmail(email), truncate(body, 180))
+	if ok, err := barkPushFn(key, title, msg, ""); !ok {
+		logger.Warnf("403 需重新登录告警推送失败: %v", err)
+	}
+}

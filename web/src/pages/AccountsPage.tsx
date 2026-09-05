@@ -77,6 +77,12 @@ export default function AccountsPage() {
   const [pwdAcc, setPwdAcc] = useState<AccountItem | null>(null)
   const [pwdValue, setPwdValue] = useState("")
 
+  // 需重新登录弹窗：账号被网关 403 完整性审查停用时弹出，引导去重新授权。
+  // 每个账号本次会话只自动弹一次（列表 15s 轮询，避免反复打扰）。
+  const [reloginOpen, setReloginOpen] = useState(false)
+  const [reloginAcc, setReloginAcc] = useState<AccountItem | null>(null)
+  const reloginPrompted = useRef<Set<number>>(new Set())
+
   const load = useCallback(async () => {
     try {
       setData(await api.accounts())
@@ -92,6 +98,19 @@ export default function AccountsPage() {
     const t = setInterval(load, 15000)
     return () => clearInterval(t)
   }, [load])
+
+  // 发现被要求重新登录的账号 → 弹窗引导（每个账号只自动弹一次）
+  useEffect(() => {
+    if (!data) return
+    const flagged = data.accounts.filter(
+      (a) => a.device_status === "relogin" && !a.enabled && !reloginPrompted.current.has(a.id)
+    )
+    if (flagged.length > 0) {
+      flagged.forEach((a) => reloginPrompted.current.add(a.id))
+      setReloginAcc(flagged[0])
+      setReloginOpen(true)
+    }
+  }, [data])
 
   useEffect(() => {
     return () => {
@@ -413,7 +432,10 @@ export default function AccountsPage() {
                         {a.device_status_reason}
                       </div>
                     )}
-                    {!a.enabled && a.authorized && (
+                    {a.device_status === "relogin" && (
+                      <Badge variant="destructive" className="mt-1 w-fit text-[11px]">需重新登录</Badge>
+                    )}
+                    {!a.enabled && a.authorized && a.device_status !== "relogin" && (
                       <div className="mt-1 text-[11px] text-red-600">已停用 · 需人工到 u1s1.io 处理</div>
                     )}
                   </TableCell>
@@ -447,6 +469,11 @@ export default function AccountsPage() {
                     <div className="flex justify-end gap-2 flex-wrap">
                       {a.authorized ? (
                         <>
+                          <Button size="sm" variant="outline" disabled={busy === `auth-${a.id}`}
+                            onClick={() => startAuth(a)}>
+                            <ExternalLink className="mr-1 h-3 w-3" />
+                            重新授权
+                          </Button>
                           <Button size="sm" variant="ghost" disabled={busy === `checkin-${a.id}`}
                             onClick={() => checkinOne(a)}>
                             <RefreshCw className={`mr-1 h-3 w-3 ${busy === `checkin-${a.id}` ? "animate-spin" : ""}`} />
@@ -556,6 +583,34 @@ export default function AccountsPage() {
                 {authState === "confirming" ? "确认中…" : "我已授权"}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 需重新登录提醒：账号被网关 403 完整性审查停用，引导去重新授权 */}
+      <Dialog open={reloginOpen} onOpenChange={setReloginOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>账号需要重新登录</DialogTitle>
+            <DialogDescription>
+              账号 {reloginAcc?.email_masked} 被 u1s1 网关要求重新登录（客户端完整性审查 403），已自动停用以免升级为封禁。
+              官方提示的恢复方式就是重新登录：点下方按钮重新授权，授权成功后账号会自动恢复启用。
+            </DialogDescription>
+          </DialogHeader>
+          {reloginAcc?.device_status_reason && (
+            <p className="max-h-28 overflow-auto rounded-md border bg-muted/50 px-3 py-2 text-xs text-muted-foreground break-all">
+              {reloginAcc.device_status_reason}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReloginOpen(false)}>稍后处理</Button>
+            <Button onClick={() => {
+              const acc = reloginAcc
+              setReloginOpen(false)
+              if (acc) startAuth(acc)
+            }}>
+              去重新授权
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

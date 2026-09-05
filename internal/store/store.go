@@ -137,6 +137,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE accounts ADD COLUMN device_identity TEXT NOT NULL DEFAULT ''`,
 		// 被网关拒绝的原因（401 需重授权 / 403 不受信任已停用），供后台展示与排障。
 		`ALTER TABLE accounts ADD COLUMN device_status_reason TEXT NOT NULL DEFAULT ''`,
+		// 设备信任状态（''|relogin|banned）：relogin=被要求重新登录（重新授权可恢复），
+		// banned=不受信任需人工申诉。两者都会停用，但后台处置路径不同。
+		`ALTER TABLE accounts ADD COLUMN device_status TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migrate: %w", err)
@@ -801,6 +804,10 @@ type Account struct {
 	Authorized     bool   `json:"authorized"`
 	// DeviceStatusReason 设备被网关拒绝的原因（401/403），空=正常。
 	DeviceStatusReason    string `json:"device_status_reason,omitempty"`
+	// DeviceStatus 设备信任状态：''=正常 | 'relogin'=被网关要求重新登录（403 完整性审查，
+	// 重新授权可恢复）| 'banned'=不受信任（重登没用，需人工到官网申诉）。
+	// 与 enabled 正交：relogin 也会停用（不再拿它敲门），但后台引导的是「重新授权」而非申诉。
+	DeviceStatus          string `json:"device_status,omitempty"`
 	LastCheckinAt         int64  `json:"last_checkin_at"`
 	LoginCheckinRemaining int64  `json:"login_checkin_remaining"`
 	LastWebCheckinAt      int64  `json:"last_web_checkin_at"`
@@ -829,7 +836,7 @@ type AccountPackage struct {
 }
 
 const accountCols = `id,email,password,note,enabled,device_token,api_key,device_id,
-	device_private_jwk,device_public_jwk,device_name,device_identity,authorized,device_status_reason,
+	device_private_jwk,device_public_jwk,device_name,device_identity,authorized,device_status_reason,device_status,
 	last_checkin_at,login_checkin_remaining,last_web_checkin_at,web_checkin_status,packages_json,
 	total_requests,total_tokens,created_at,updated_at`
 
@@ -838,7 +845,7 @@ func scanAccount(row interface{ Scan(...any) error }) (*Account, error) {
 	var enabled, authorized int
 	err := row.Scan(&a.ID, &a.Email, &a.Password, &a.Note, &enabled, &a.DeviceToken, &a.APIKey,
 		&a.DeviceID, &a.DevicePrivateJWK, &a.DevicePublicJWK, &a.DeviceName, &a.DeviceIdentity, &authorized,
-		&a.DeviceStatusReason,
+		&a.DeviceStatusReason, &a.DeviceStatus,
 		&a.LastCheckinAt, &a.LoginCheckinRemaining, &a.LastWebCheckinAt, &a.WebCheckinStatus,
 		&a.PackagesJSON, &a.TotalRequests, &a.TotalTokens, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
@@ -949,7 +956,7 @@ func (s *Store) GetAccountCredential(id int64) (email, password string, err erro
 func (s *Store) SaveAccountDeviceCredential(id int64, deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, identityJSON string) error {
 	_, err := s.db.Exec(`UPDATE accounts SET device_token=?, api_key=?, device_id=?,
 		device_private_jwk=?, device_public_jwk=?, device_name=?, device_identity=?,
-		authorized=1, enabled=1, device_status_reason='', updated_at=?
+		authorized=1, enabled=1, device_status='', device_status_reason='', updated_at=?
 		WHERE id=?`,
 		deviceToken, apiKey, deviceID, privJWK, pubJWK, deviceName, identityJSON, time.Now().Unix(), id)
 	return err
@@ -961,7 +968,16 @@ func (s *Store) SaveAccountDeviceCredential(id int64, deviceToken, apiKey, devic
 // AccessDeniedError），所以我们也不能继续拿这台设备去敲门：必须停用并留原因，
 // 等人工去官网处理。重授权（SaveAccountDeviceCredential）会把 enabled 恢复为 1。
 func (s *Store) DisableAccountByGateway(id int64, reason string) error {
-	_, err := s.db.Exec(`UPDATE accounts SET enabled=0, device_status_reason=?, updated_at=? WHERE id=?`,
+	_, err := s.db.Exec(`UPDATE accounts SET enabled=0, device_status='banned', device_status_reason=?, updated_at=? WHERE id=?`,
+		reason, time.Now().Unix(), id)
+	return err
+}
+
+// MarkAccountNeedsRelogin 因网关「客户端完整性审查」（403 client_integrity_review）停用账号，
+// 并标记为需重新登录：这类 403 官方文案就是「请升级并重新登录 u1s1」，重新授权可恢复，
+// 与 banned（重登没用、只能申诉）不同。重授权成功（SaveAccountDeviceCredential）会清掉该状态。
+func (s *Store) MarkAccountNeedsRelogin(id int64, reason string) error {
+	_, err := s.db.Exec(`UPDATE accounts SET enabled=0, device_status='relogin', device_status_reason=?, updated_at=? WHERE id=?`,
 		reason, time.Now().Unix(), id)
 	return err
 }
