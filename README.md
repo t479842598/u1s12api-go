@@ -5,7 +5,7 @@
 ## 特性
 
 - **OpenAI 兼容**：`GET /v1/models`、`POST /v1/chat/completions`（流式 / 非流式）
-- **请求头指纹模拟**：与官方 u1s1-cli 1.8.0 逐头逐字节对齐（HTTP/1.1 + 小写头名 + UA + X-Stainless-* + x-u1s1-version/client/platform/attestation），身份由部署机真实环境派生
+- **请求头指纹模拟**：与官方 u1s1-cli 1.8.1 逐头逐字节对齐（HTTP/1.1 + 小写头名 + UA + X-Stainless-* + x-u1s1-version/client/platform/attestation），身份由部署机真实环境派生
 - **官网账号 + 设备授权**：后台录入官网账号（邮箱+密码），发起设备授权领回 `u1s1d-` 设备凭证（DPoP 签名），网关即被识别为官方客户端，消耗「仅限 u1s1 客户端使用」的加量包
 - **每日自动签到**：每天北京时间 0 点后用设备凭证调 `/v1/me` 自动领取每日打卡 200 万 Token 加量包
 - **设备凭证优先转发**：有已授权账号时聊天转发优先走设备凭证通道（消耗客户端量包），失败回退 `u1s1-` Key 池
@@ -41,7 +41,7 @@ open http://127.0.0.1:8080/admin/
 | `UPSTREAM_BASE_URL` | `https://api.u1s1.io/v1` | 上游网关 |
 | `EGRESS_PROXY_URL` | 空（直连） | 出口代理 `http://`/`socks5://` |
 | `FINGERPRINT_PROFILE` | `auto` | 头指纹档案 |
-| `U1S1_VERSION` | `1.8.0` | x-u1s1-version 头（跟随官方 CLI npm latest） |
+| `U1S1_VERSION` | `1.8.1` | x-u1s1-version 头（跟随官方 CLI npm latest） |
 | `FINGERPRINT_NODE_VERSION` | 空 | 声称的 `x-stainless-runtime-version`；空=本机 node（须 ≥22.19.0）否则取真实发布值并持久化 |
 | `LOG_LEVEL` | `info` | 日志级别 |
 | `QUOTA_AUTO_REFRESH` | `true` | 北京时间 0 点后自动全量刷新上游 Key 配额 |
@@ -67,18 +67,18 @@ GOARCH→node arch 映射，写入 `data/fingerprint.json`。只有 Node 版本�
 
 ### 对齐的是哪个官方客户端
 
-官方有两个发请求的入口，用的是**同一份 `device-auth.js`**（1.5.0→1.8.0 逐字节未变），
+官方有两个发请求的入口，用的是**同一份 `device-auth.js`**（1.5.0→1.8.1 逐字节未变），
 头集合与 DPoP 结构完全相同，真实差异只有两处。本项目对齐 **CLI（terminal）**：
 
-| 项 | u1s1-cli 1.8.0 | 桌面客户端 0.1.15 | 本项目 |
+| 项 | u1s1-cli 1.8.1 | 桌面客户端 0.1.15 | 本项目 |
 |---|---|---|---|
 | `x-u1s1-client` | `terminal` | `desktop` | **`terminal`** |
 | 辅助端点 UA（`/models` `/me` `/auth/device/*`） | `node` | `undici` | **`node`**（会话中途刷新用 `undici`） |
-| `x-u1s1-version` | `1.8.0` | `1.3.0`（内嵌 CLI 版本） | **`1.8.0`** |
+| `x-u1s1-version` | `1.8.1` | `1.3.0`（内嵌 CLI 版本） | **`1.8.1`** |
 | chat UA / `X-Stainless-*` / `x-u1s1-platform` / DPoP 结构 | 相同 | 相同 | 已对齐 |
 
 **为什么不再对齐桌面端**（ADR 0001）：桌面端 0.1.9→0.1.11→0.1.15 三次都仍内嵌 CLI **1.3.0**，
-而 npm CLI 已到 1.7.1 —— `desktop` + 新版本是现实中不存在的组合；且桌面端 Node 内嵌固定
+而 npm CLI 已到 1.8.1 —— `desktop` + 新版本是现实中不存在的组合；且桌面端 Node 内嵌固定
 v22.23.1，轮转多套 runtime 版本在 desktop 口径下同样不可能。CLI 通道下这些值都真实存在。
 
 **为什么新部署取真实主机身份**（ADR 0002）：官方 CLI 报出的 hostname / platform / 内核版本 /
@@ -87,11 +87,11 @@ v22.23.1，轮转多套 runtime 版本在 desktop 口径下同样不可能。CLI
 后台切档案不影响它们 —— 真实世界里一台设备就是一个操作系统。**既有部署不在升级时被改造**，
 避免为了自洽而牺牲「无感升级」。
 
-已复核到 **CLI 1.8.0** 与 **桌面端 0.1.15**（2026-09-05）：请求链路**零变化**
+已复核到 **CLI 1.8.1** 与 **桌面端 0.1.15**（2026-09-05）：请求链路**零变化**
 （`device-auth.js`/`config.js` 逐字节相同，`login.js` 只多一行日志）；1.7.1 唯一与本项目相关的
 新增是 `api.js` 的 `AccessDeniedError` —— 官方把 **403 定性为「封禁/停用/设备不受信任，重登也没用」
 并直接 `process.exit(1)`**，我们据此把 401 与 403 分流处置（403 停用账号 + Bark 告警 + 停止轮换）。
-下次需要同步的触发条件：npm `u1s1-cli` 超过 1.8.0（那是 `x-u1s1-version` 的取值）、本脚本输出
+下次需要同步的触发条件：npm `u1s1-cli` 超过 1.8.1（那是 `x-u1s1-version` 的取值）、本脚本输出
 出现新增/缺失的头、或官方 `engines.node` 下限变了。复核记录与跑法见脚本头注释。
 
 除头集合外，本项目还复刻了官方三个**行为**特征：attestation 的 24h 提前刷新与失败后 30s 冷却

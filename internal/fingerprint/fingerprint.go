@@ -3,9 +3,9 @@
 // 对齐目标是**官方 CLI（terminal surface）**，不是桌面客户端 —— 依据与取舍见
 // ADR 0001（.lrnev/scenes/00-default/decisions/adr/0001-*.md）。要点：
 //
-//   - 桌面端截至 0.1.15 仍内嵌 u1s1-cli **1.3.0**，而 npm CLI 已到 **1.8.0**；
+//   - 桌面端截至 0.1.15 仍内嵌 u1s1-cli **1.3.0**，而 npm CLI 已到 **1.8.1**；
 //     报 desktop + 新版本是现实中不存在的组合。
-//   - 两个入口用的是**同一份 device-auth.js**（1.5.0→1.8.0 逐字节未变），
+//   - 两个入口用的是**同一份 device-auth.js**（1.5.0→1.8.1 逐字节未变），
 //     头集合与 DPoP 结构完全相同，真实差异只有两处：
 //     x-u1s1-client（terminal|desktop）与裸 fetch 的 UA（node|undici）。
 //
@@ -94,7 +94,7 @@ var Profiles = []Profile{
 	},
 }
 
-// SDKPackageVersion openai SDK 版本（pi-ai 0.84.4 依赖 openai 6.40.0，CLI 1.3.0~1.8.0 未变）。
+// SDKPackageVersion openai SDK 版本（pi-ai 0.84.4 依赖 openai 6.40.0，CLI 1.3.0~1.8.1 未变）。
 const SDKPackageVersion = "6.40.0"
 
 // ClientSurface x-u1s1-client 头。官方取值顺序：U1S1_CLIENT 环境变量
